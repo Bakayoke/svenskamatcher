@@ -15,7 +15,18 @@ import {
   type ScoutPreset,
   type ShortlistedMatch,
 } from './agentStore'
-import { fetchMatches } from './api'
+import {
+  fetchEnrich,
+  fetchMatches,
+  type EnrichedFixture,
+} from './api'
+import { ScoutPanel } from './ScoutPanel'
+import {
+  afStatusLabel,
+  findEnrichedFixture,
+  isEliteCompetitionName,
+  isLiveStatus,
+} from './enrich'
 import { districtName } from './districts'
 import {
   countGames,
@@ -105,6 +116,10 @@ export default function App() {
   const [notes, setNotes] = useState<Record<string, string>>(() => loadNotes())
   const [noteGameId, setNoteGameId] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
+  const [enriched, setEnriched] = useState<EnrichedFixture[]>([])
+  const [enrichConfigured, setEnrichConfigured] = useState<boolean | null>(null)
+  const [enrichError, setEnrichError] = useState<string | null>(null)
+  const [scoutFixture, setScoutFixture] = useState<EnrichedFixture | null>(null)
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 720px)')
@@ -180,9 +195,35 @@ export default function App() {
       fetchMatches(fromIso, toIso)
         .then((payload) => setData(payload))
         .catch(() => {})
+      fetchEnrich(fromIso, toIso)
+        .then((r) => {
+          setEnriched(r.fixtures)
+          setEnrichConfigured(r.configured)
+        })
+        .catch(() => {})
     }, 90_000)
     return () => window.clearInterval(id)
   }, [viewingToday, canFetch, fromIso, toIso])
+
+  useEffect(() => {
+    if (!data) return
+    const hasElite = (data.competitions ?? []).some((c) => isEliteCompetitionName(c.name))
+    if (!hasElite) {
+      setEnriched([])
+      setEnrichError(null)
+      return
+    }
+    let cancelled = false
+    fetchEnrich(fromIso, toIso).then((r) => {
+      if (cancelled) return
+      setEnriched(r.fixtures)
+      setEnrichConfigured(r.configured)
+      setEnrichError(r.error ?? null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [data, fromIso, toIso])
 
   const filteredCompetitions = useMemo(
     () => filterCompetitions(data?.competitions ?? [], filters),
@@ -592,6 +633,18 @@ export default function App() {
 
         {error && <p className="error-box">{error}</p>}
 
+        {enrichConfigured === false && (
+          <p className="empty">
+            Elit-scoutdata (live/lineups/ratings/transfers) kräver gratis API-Football-nyckel.
+            Skapa på dashboard.api-football.com och sätt <code>API_FOOTBALL_KEY</code>.
+          </p>
+        )}
+        {enrichConfigured && enrichError && (
+          <p className="hint warn" style={{ color: '#fecb00' }}>
+            Elit-API: {enrichError}
+          </p>
+        )}
+
         {!loading && !error && gameCount === 0 && (
           <p className="empty">
             {showShortlistOnly
@@ -611,6 +664,11 @@ export default function App() {
                 key={game.gameId}
                 game={game}
                 now={now}
+                enriched={findEnrichedFixture(
+                  game.homeTeam.name,
+                  game.awayTeam.name,
+                  enriched,
+                )}
                 watched={watchSet}
                 shortlisted={shortlistIds.has(game.gameId)}
                 note={notes[String(game.gameId)] ?? ''}
@@ -621,6 +679,7 @@ export default function App() {
                   setNoteGameId((id) => (id === game.gameId ? null : game.gameId))
                 }
                 onNoteChange={(value) => setNotes(saveNote(game.gameId, value, notes))}
+                onOpenScout={(f) => setScoutFixture(f)}
                 style={{ animationDelay: `${Math.min(index, 16) * 28}ms` }}
               />
             ))}
@@ -632,6 +691,7 @@ export default function App() {
                 key={competition.competitionId}
                 competition={competition}
                 now={now}
+                enrichedFixtures={enriched}
                 watched={watchSet}
                 shortlistIds={shortlistIds}
                 notes={notes}
@@ -640,12 +700,17 @@ export default function App() {
                 onToggleShortlist={(game) => setShortlist(toggleShortlist(game, shortlist))}
                 onToggleNote={(id) => setNoteGameId((cur) => (cur === id ? null : id))}
                 onNoteChange={(id, value) => setNotes(saveNote(id, value, notes))}
+                onOpenScout={(f) => setScoutFixture(f)}
                 style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
               />
             ))}
           </div>
         )}
       </section>
+
+      {scoutFixture && (
+        <ScoutPanel fixture={scoutFixture} onClose={() => setScoutFixture(null)} />
+      )}
 
       <footer className="footer">
         <p>
@@ -669,6 +734,8 @@ function AgentActions({
   onToggleShortlist,
   onToggleNote,
   onNoteChange,
+  scoutAvailable,
+  onOpenScout,
 }: {
   game: FlatGame
   watched: Set<string>
@@ -679,6 +746,8 @@ function AgentActions({
   onToggleShortlist: () => void
   onToggleNote: () => void
   onNoteChange: (value: string) => void
+  scoutAvailable?: boolean
+  onOpenScout?: () => void
 }) {
   const homeWatched = watched.has(game.homeTeam.name.trim().toLowerCase())
   const awayWatched = watched.has(game.awayTeam.name.trim().toLowerCase())
@@ -712,6 +781,11 @@ function AgentActions({
         <button type="button" className={`icon-btn ${note ? 'on' : ''}`} onClick={onToggleNote}>
           Anteckning
         </button>
+        {scoutAvailable && onOpenScout && (
+          <button type="button" className="icon-btn on" onClick={onOpenScout}>
+            Lineup / ratings
+          </button>
+        )}
       </div>
       {noteOpen && (
         <textarea
@@ -730,6 +804,7 @@ function AgentActions({
 function TimelineGame({
   game,
   now,
+  enriched,
   watched,
   shortlisted,
   note,
@@ -738,10 +813,12 @@ function TimelineGame({
   onToggleShortlist,
   onToggleNote,
   onNoteChange,
+  onOpenScout,
   style,
 }: {
   game: FlatGame
   now: Date
+  enriched: EnrichedFixture | null
   watched: Set<string>
   shortlisted: boolean
   note: string
@@ -750,18 +827,29 @@ function TimelineGame({
   onToggleShortlist: () => void
   onToggleNote: () => void
   onNoteChange: (value: string) => void
+  onOpenScout: (f: EnrichedFixture) => void
   style?: CSSProperties
 }) {
   const phase = matchPhase(game, now)
   const homeDistrict = districtName(game.homeTeamClubAssociationId)
+  const live = enriched && isLiveStatus(enriched.status)
+  const scoreHome = enriched?.goalsHome ?? game.score.home
+  const scoreAway = enriched?.goalsAway ?? game.score.away
   return (
-    <li className={`timeline-game phase-${phase} ${shortlisted ? 'shortlisted' : ''}`} style={style}>
+    <li
+      className={`timeline-game phase-${phase} ${shortlisted ? 'shortlisted' : ''} ${live ? 'af-live' : ''}`}
+      style={style}
+    >
       <div className="tl-time">
         <span className="tl-clock">{kickoffClock(game.date)}</span>
         <span className={`tl-phase status-${game.status}`}>
-          {phase === 'live' || phase === 'soon' ? phaseLabel(phase) : statusLabel(game.status)}
+          {enriched
+            ? afStatusLabel(enriched.status, enriched.elapsed)
+            : phase === 'live' || phase === 'soon'
+              ? phaseLabel(phase)
+              : statusLabel(game.status)}
         </span>
-        {(phase === 'soon' || phase === 'live') && (
+        {(phase === 'soon' || phase === 'live' || live) && (
           <span className="tl-rel">{relativeKickoff(game.date, now)}</span>
         )}
       </div>
@@ -770,14 +858,15 @@ function TimelineGame({
           {game.competitionName}
           <span>
             {genderShort(game.genderName)} · {game.ageCategoryName} · {homeDistrict}
+            {enriched ? ' · API-Football' : ''}
           </span>
         </p>
         <div className="teams compact">
           <TeamSide team={game.homeTeam} align="end" />
           <div className="score" aria-label="Resultat">
-            <span>{game.score.home}</span>
+            <span>{scoreHome}</span>
             <span className="sep">–</span>
-            <span>{game.score.away}</span>
+            <span>{scoreAway}</span>
           </div>
           <TeamSide team={game.awayTeam} align="start" />
         </div>
@@ -797,6 +886,8 @@ function TimelineGame({
           onToggleShortlist={onToggleShortlist}
           onToggleNote={onToggleNote}
           onNoteChange={onNoteChange}
+          scoutAvailable={Boolean(enriched)}
+          onOpenScout={enriched ? () => onOpenScout(enriched) : undefined}
         />
       </div>
     </li>
@@ -806,6 +897,7 @@ function TimelineGame({
 function CompetitionBlock({
   competition,
   now,
+  enrichedFixtures,
   watched,
   shortlistIds,
   notes,
@@ -814,10 +906,12 @@ function CompetitionBlock({
   onToggleShortlist,
   onToggleNote,
   onNoteChange,
+  onOpenScout,
   style,
 }: {
   competition: Competition
   now: Date
+  enrichedFixtures: EnrichedFixture[]
   watched: Set<string>
   shortlistIds: Set<number>
   notes: Record<string, string>
@@ -826,6 +920,7 @@ function CompetitionBlock({
   onToggleShortlist: (game: FlatGame) => void
   onToggleNote: (id: number) => void
   onNoteChange: (id: number, value: string) => void
+  onOpenScout: (f: EnrichedFixture) => void
   style?: CSSProperties
 }) {
   return (
@@ -846,28 +941,40 @@ function CompetitionBlock({
             ageCategoryName: competition.ageCategoryName,
           }
           const phase = matchPhase(flat, now)
+          const enriched = findEnrichedFixture(
+            game.homeTeam.name,
+            game.awayTeam.name,
+            enrichedFixtures,
+          )
+          const live = enriched && isLiveStatus(enriched.status)
+          const scoreHome = enriched?.goalsHome ?? game.score.home
+          const scoreAway = enriched?.goalsAway ?? game.score.away
           return (
             <li
               key={game.gameId}
-              className={`game phase-${phase} ${shortlistIds.has(game.gameId) ? 'shortlisted' : ''}`}
+              className={`game phase-${phase} ${shortlistIds.has(game.gameId) ? 'shortlisted' : ''} ${live ? 'af-live' : ''}`}
             >
               <div className="game-meta">
                 <time dateTime={game.date}>
                   {kickoffClock(game.date)}
-                  {(phase === 'soon' || phase === 'live') && (
+                  {(phase === 'soon' || phase === 'live' || live) && (
                     <> · {relativeKickoff(game.date, now)}</>
                   )}
                 </time>
                 <span className={`status status-${game.status}`}>
-                  {phase === 'live' || phase === 'soon' ? phaseLabel(phase) : statusLabel(game.status)}
+                  {enriched
+                    ? afStatusLabel(enriched.status, enriched.elapsed)
+                    : phase === 'live' || phase === 'soon'
+                      ? phaseLabel(phase)
+                      : statusLabel(game.status)}
                 </span>
               </div>
               <div className="teams">
                 <TeamSide team={game.homeTeam} align="end" />
                 <div className="score" aria-label="Resultat">
-                  <span>{game.score.home}</span>
+                  <span>{scoreHome}</span>
                   <span className="sep">–</span>
-                  <span>{game.score.away}</span>
+                  <span>{scoreAway}</span>
                 </div>
                 <TeamSide team={game.awayTeam} align="start" />
               </div>
@@ -887,6 +994,8 @@ function CompetitionBlock({
                 onToggleShortlist={() => onToggleShortlist(flat)}
                 onToggleNote={() => onToggleNote(game.gameId)}
                 onNoteChange={(value) => onNoteChange(game.gameId, value)}
+                scoutAvailable={Boolean(enriched)}
+                onOpenScout={enriched ? () => onOpenScout(enriched) : undefined}
               />
             </li>
           )
