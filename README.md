@@ -17,7 +17,26 @@ Den här appen proxar website-endpointen med cache och begränsat intervall (max
 - Express (proxy `/api/matches`)
 - `react-day-picker` för kalender
 
-## Kom igång
+## Deploy (Cloudflare Pages)
+
+Ingen separat backend behövs. API-proxyn körs som **Pages Functions** (`/functions/api/*`).
+
+```bash
+npm run deploy
+```
+
+Live:
+- https://svenskamatcher.pages.dev
+- Custom domain: koppla `svenskamatcher.com` under Pages → Custom domains
+
+DNS (om Cloudflare inte skapar dem automatiskt):
+
+| Type  | Name | Target                     | Proxy |
+| ----- | ---- | -------------------------- | ----- |
+| CNAME | `@`  | `svenskamatcher.pages.dev` | On    |
+| CNAME | `www`| `svenskamatcher.pages.dev` | On    |
+
+## Kom igång (lokalt)
 
 ```bash
 npm install
