@@ -5,18 +5,23 @@ import { DayPicker, type DateRange } from 'react-day-picker'
 import { sv as dayPickerSv } from 'react-day-picker/locale'
 import 'react-day-picker/style.css'
 import {
+  loadBasePlace,
   loadNotes,
   loadShortlist,
   loadWatchTeams,
   matchesPreset,
+  saveBasePlace,
   saveNote,
   toggleShortlist,
   toggleWatchTeam,
+  type BasePlace,
   type ScoutPreset,
   type ShortlistedMatch,
 } from './agentStore'
 import { fetchMatches } from './api'
+import { buildClusters } from './clusters'
 import { districtName } from './districts'
+import { downloadShortlistCsv, downloadShortlistJson } from './exportScout'
 import {
   countGames,
   emptyFilters,
@@ -27,6 +32,7 @@ import {
   type FlatGame,
 } from './filters'
 import { buildShortlistIcs, downloadIcs } from './ics'
+import { fetchGeocode } from './places'
 import type { Competition, MatchesPayload } from './types'
 import { matchUrl, statusLabel } from './types'
 import {
@@ -40,6 +46,7 @@ import {
   type FocusMode,
 } from './time'
 import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlState'
+import { formatKm, sortGamesByDistance, useVenueEnrichment } from './useVenueEnrichment'
 import './App.css'
 
 type Mode = 'single' | 'range'
@@ -105,6 +112,13 @@ export default function App() {
   const [notes, setNotes] = useState<Record<string, string>>(() => loadNotes())
   const [noteGameId, setNoteGameId] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
+  const [teamFocus, setTeamFocus] = useState<string | null>(null)
+  const [clusterId, setClusterId] = useState<string | null>(null)
+  const [basePlace, setBasePlace] = useState<BasePlace | null>(() => loadBasePlace())
+  const [baseDraft, setBaseDraft] = useState(() => loadBasePlace()?.query ?? '')
+  const [baseBusy, setBaseBusy] = useState(false)
+  const [baseError, setBaseError] = useState<string | null>(null)
+  const [sortByDistance, setSortByDistance] = useState(false)
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 720px)')
@@ -197,11 +211,38 @@ export default function App() {
       const ids = new Set(shortlist.map((s) => s.gameId))
       games = games.filter((g) => ids.has(g.gameId))
     }
+    if (teamFocus) {
+      const t = teamFocus.trim().toLowerCase()
+      games = games.filter(
+        (g) =>
+          g.homeTeam.name.trim().toLowerCase() === t ||
+          g.awayTeam.name.trim().toLowerCase() === t,
+      )
+    }
     return games
-  }, [flat, preset, watchTeams, showShortlistOnly, shortlist])
+  }, [flat, preset, watchTeams, showShortlistOnly, shortlist, teamFocus])
 
-  const focused = useMemo(() => filterByFocus(scouted, focus, now), [scouted, focus, now])
-  const timeline = useMemo(() => sortForOverview(focused, now), [focused, now])
+  const clusters = useMemo(() => buildClusters(scouted), [scouted])
+
+  const focused = useMemo(() => {
+    let games = filterByFocus(scouted, focus, now)
+    if (clusterId) {
+      const cluster = clusters.find((c) => c.id === clusterId)
+      if (cluster) {
+        const ids = new Set(cluster.games.map((g) => g.gameId))
+        games = games.filter((g) => ids.has(g.gameId))
+      }
+    }
+    return games
+  }, [scouted, focus, now, clusterId, clusters])
+
+  const venueMeta = useVenueEnrichment(focused, basePlace)
+
+  const timeline = useMemo(() => {
+    if (sortByDistance && basePlace) return sortGamesByDistance(focused, venueMeta)
+    return sortForOverview(focused, now)
+  }, [focused, now, sortByDistance, basePlace, venueMeta])
+
   const phases = useMemo(() => countByPhase(scouted, now), [scouted, now])
 
   const ages = useMemo(() => uniqueAgeCategories(data?.competitions ?? []), [data])
@@ -268,9 +309,52 @@ export default function App() {
     window.setTimeout(() => setCopied(false), 1600)
   }
 
-  function exportShortlist() {
+  function exportShortlistIcs() {
     if (shortlist.length === 0) return
     downloadIcs(`scoutlista-${fromIso}.ics`, buildShortlistIcs(shortlist))
+  }
+
+  function exportShortlistCsvFile() {
+    if (shortlist.length === 0) return
+    downloadShortlistCsv(`scoutlista-${fromIso}.csv`, shortlist)
+  }
+
+  function exportShortlistJsonFile() {
+    if (shortlist.length === 0) return
+    downloadShortlistJson(`scoutlista-${fromIso}.json`, shortlist)
+  }
+
+  async function saveBase() {
+    const q = baseDraft.trim()
+    if (!q) {
+      setBasePlace(null)
+      saveBasePlace(null)
+      setSortByDistance(false)
+      setBaseError(null)
+      return
+    }
+    setBaseBusy(true)
+    setBaseError(null)
+    try {
+      const point = await fetchGeocode(q)
+      if (!point) {
+        setBaseError('Hittade ingen ort. Prova t.ex. "Stockholm" eller "Malmö".')
+        return
+      }
+      const place: BasePlace = {
+        query: q,
+        lat: point.lat,
+        lon: point.lon,
+        label: point.label,
+      }
+      setBasePlace(place)
+      saveBasePlace(place)
+      setSortByDistance(true)
+    } catch (err) {
+      setBaseError(err instanceof Error ? err.message : 'Kunde inte spara basort')
+    } finally {
+      setBaseBusy(false)
+    }
   }
 
   const shortlistIds = useMemo(() => new Set(shortlist.map((s) => s.gameId)), [shortlist])
@@ -290,7 +374,7 @@ export default function App() {
       : []
 
   return (
-    <div className="page">
+    <div className="page app-shell">
       <header className="hero">
         <p className="eyebrow">Scout · Agenter · Sverige</p>
         <h1 className="brand">Svenska Matcher</h1>
@@ -372,10 +456,21 @@ export default function App() {
             Scoutlista ({shortlist.length})
           </button>
           {shortlist.length > 0 && (
-            <button type="button" className="chip" onClick={exportShortlist}>
-              Exportera .ics
-            </button>
+            <>
+              <button type="button" className="chip" onClick={exportShortlistIcs}>
+                Exportera .ics
+              </button>
+              <button type="button" className="chip" onClick={exportShortlistCsvFile}>
+                .csv
+              </button>
+              <button type="button" className="chip" onClick={exportShortlistJsonFile}>
+                .json
+              </button>
+            </>
           )}
+          <button type="button" className="chip no-print" onClick={() => window.print()}>
+            Skriv ut dagsplan
+          </button>
         </div>
 
         {shortlistConflicts.length > 0 && (
@@ -510,6 +605,56 @@ export default function App() {
               Bevakade lag: {watchTeams.join(', ')}
             </p>
           )}
+
+          <div className="base-place">
+            <label className="field">
+              <span>Basort (för avstånd)</span>
+              <div className="base-row">
+                <input
+                  type="text"
+                  placeholder="T.ex. Göteborg"
+                  value={baseDraft}
+                  onChange={(e) => setBaseDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void saveBase()
+                    }
+                  }}
+                />
+                <button type="button" className="chip" disabled={baseBusy} onClick={() => void saveBase()}>
+                  {baseBusy ? 'Sparar…' : 'Spara'}
+                </button>
+                {basePlace && (
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => {
+                      setBasePlace(null)
+                      saveBasePlace(null)
+                      setBaseDraft('')
+                      setSortByDistance(false)
+                    }}
+                  >
+                    Rensa
+                  </button>
+                )}
+              </div>
+            </label>
+            {basePlace && (
+              <div className="chip-row tight">
+                <button
+                  type="button"
+                  className={`chip ${sortByDistance ? 'active' : ''}`}
+                  onClick={() => setSortByDistance((v) => !v)}
+                >
+                  Närmast först
+                </button>
+                <p className="hint inline-hint">Från {basePlace.query}</p>
+              </div>
+            )}
+            {baseError && <p className="hint warn">{baseError}</p>}
+          </div>
         </details>
       </section>
 
@@ -592,15 +737,97 @@ export default function App() {
 
         {error && <p className="error-box">{error}</p>}
 
+        {(teamFocus || clusterId) && (
+          <div className="focus-banner no-print">
+            {teamFocus && (
+              <p>
+                Visar matcher för <strong>{teamFocus}</strong> i valt intervall.
+              </p>
+            )}
+            {clusterId && (
+              <p>
+                Visar kluster:{' '}
+                <strong>{clusters.find((c) => c.id === clusterId)?.label ?? 'valt'}</strong>
+              </p>
+            )}
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                setTeamFocus(null)
+                setClusterId(null)
+              }}
+            >
+              Visa alla
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && !teamFocus && clusters.length > 0 && (
+          <section className="clusters panel no-print" aria-label="Kluster">
+            <h3>Kluster samma dag</h3>
+            <p className="cluster-lede">Flera matcher i samma distrikt eller på samma arena.</p>
+            <ul className="cluster-list">
+              {clusters.slice(0, 8).map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    className={`cluster-btn ${clusterId === c.id ? 'active' : ''}`}
+                    onClick={() => setClusterId((id) => (id === c.id ? null : c.id))}
+                  >
+                    <span className="cluster-count">{c.games.length}</span>
+                    <span className="cluster-body">
+                      <strong>{c.label}</strong>
+                      <small>
+                        {c.dayLabel} · {c.kind === 'venue' ? 'Arena' : 'Distrikt'}
+                      </small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <div className="print-only print-plan">
+          <h2>Dagsplan · {dateHeadline}</h2>
+          <p>
+            {gameCount} matcher
+            {basePlace ? ` · från ${basePlace.query}` : ''}
+            {teamFocus ? ` · lag: ${teamFocus}` : ''}
+          </p>
+          <ol>
+            {timeline.map((g) => {
+              const meta = venueMeta.get(g.gameId)
+              return (
+                <li key={g.gameId}>
+                  <strong>{kickoffClock(g.date)}</strong>{' '}
+                  {g.homeTeam.name.trim()} – {g.awayTeam.name.trim()}
+                  <br />
+                  <span>
+                    {g.location}
+                    {meta?.km != null ? ` · ${formatKm(meta.km)}` : ''}
+                    {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
+                  </span>
+                  <br />
+                  <span>{g.competitionName}</span>
+                </li>
+              )
+            })}
+          </ol>
+        </div>
+
         {!loading && !error && gameCount === 0 && (
           <p className="empty">
-            {showShortlistOnly
-              ? 'Scoutlistan är tom för valt datum/filter.'
-              : preset === 'watch'
-                ? 'Inga matcher för bevakade lag. Stjärnmarkera lag i en matchrad.'
-                : focus === 'live'
-                  ? 'Inga matcher pågår just nu.'
-                  : 'Inga matcher matchar filtren.'}
+            {teamFocus
+              ? `Inga matcher för ${teamFocus} i valt intervall/filter.`
+              : showShortlistOnly
+                ? 'Scoutlistan är tom för valt datum/filter.'
+                : preset === 'watch'
+                  ? 'Inga matcher för bevakade lag. Stjärnmarkera lag i en matchrad.'
+                  : focus === 'live'
+                    ? 'Inga matcher pågår just nu.'
+                    : 'Inga matcher matchar filtren.'}
           </p>
         )}
 
@@ -611,10 +838,15 @@ export default function App() {
                 key={game.gameId}
                 game={game}
                 now={now}
+                meta={venueMeta.get(game.gameId)}
                 watched={watchSet}
                 shortlisted={shortlistIds.has(game.gameId)}
                 note={notes[String(game.gameId)] ?? ''}
                 noteOpen={noteGameId === game.gameId}
+                onSelectTeam={(name) => {
+                  setClusterId(null)
+                  setTeamFocus(name)
+                }}
                 onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
                 onToggleShortlist={() => setShortlist(toggleShortlist(game, shortlist))}
                 onToggleNote={() =>
@@ -632,10 +864,15 @@ export default function App() {
                 key={competition.competitionId}
                 competition={competition}
                 now={now}
+                venueMeta={venueMeta}
                 watched={watchSet}
                 shortlistIds={shortlistIds}
                 notes={notes}
                 noteGameId={noteGameId}
+                onSelectTeam={(name) => {
+                  setClusterId(null)
+                  setTeamFocus(name)
+                }}
                 onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
                 onToggleShortlist={(game) => setShortlist(toggleShortlist(game, shortlist))}
                 onToggleNote={(id) => setNoteGameId((cur) => (cur === id ? null : id))}
@@ -730,10 +967,12 @@ function AgentActions({
 function TimelineGame({
   game,
   now,
+  meta,
   watched,
   shortlisted,
   note,
   noteOpen,
+  onSelectTeam,
   onToggleWatch,
   onToggleShortlist,
   onToggleNote,
@@ -742,10 +981,12 @@ function TimelineGame({
 }: {
   game: FlatGame
   now: Date
+  meta?: { km: number | null; weather: { summary: string } | null } | null
   watched: Set<string>
   shortlisted: boolean
   note: string
   noteOpen: boolean
+  onSelectTeam: (name: string) => void
   onToggleWatch: (name: string) => void
   onToggleShortlist: () => void
   onToggleNote: () => void
@@ -773,16 +1014,20 @@ function TimelineGame({
           </span>
         </p>
         <div className="teams compact">
-          <TeamSide team={game.homeTeam} align="end" />
+          <TeamSide team={game.homeTeam} align="end" onSelectTeam={onSelectTeam} />
           <div className="score" aria-label="Resultat">
             <span>{game.score.home}</span>
             <span className="sep">–</span>
             <span>{game.score.away}</span>
           </div>
-          <TeamSide team={game.awayTeam} align="start" />
+          <TeamSide team={game.awayTeam} align="start" onSelectTeam={onSelectTeam} />
         </div>
         <div className="game-foot">
-          <span>{game.location}</span>
+          <span>
+            {game.location}
+            {meta?.km != null ? ` · ${formatKm(meta.km)}` : ''}
+            {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
+          </span>
           <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
             Detaljer
           </a>
@@ -806,10 +1051,12 @@ function TimelineGame({
 function CompetitionBlock({
   competition,
   now,
+  venueMeta,
   watched,
   shortlistIds,
   notes,
   noteGameId,
+  onSelectTeam,
   onToggleWatch,
   onToggleShortlist,
   onToggleNote,
@@ -818,10 +1065,12 @@ function CompetitionBlock({
 }: {
   competition: Competition
   now: Date
+  venueMeta: Map<number, { km: number | null; weather: { summary: string } | null }>
   watched: Set<string>
   shortlistIds: Set<number>
   notes: Record<string, string>
   noteGameId: number | null
+  onSelectTeam: (name: string) => void
   onToggleWatch: (name: string) => void
   onToggleShortlist: (game: FlatGame) => void
   onToggleNote: (id: number) => void
@@ -846,6 +1095,7 @@ function CompetitionBlock({
             ageCategoryName: competition.ageCategoryName,
           }
           const phase = matchPhase(flat, now)
+          const meta = venueMeta.get(game.gameId)
           return (
             <li
               key={game.gameId}
@@ -863,16 +1113,20 @@ function CompetitionBlock({
                 </span>
               </div>
               <div className="teams">
-                <TeamSide team={game.homeTeam} align="end" />
+                <TeamSide team={game.homeTeam} align="end" onSelectTeam={onSelectTeam} />
                 <div className="score" aria-label="Resultat">
                   <span>{game.score.home}</span>
                   <span className="sep">–</span>
                   <span>{game.score.away}</span>
                 </div>
-                <TeamSide team={game.awayTeam} align="start" />
+                <TeamSide team={game.awayTeam} align="start" onSelectTeam={onSelectTeam} />
               </div>
               <div className="game-foot">
-                <span>{game.location}</span>
+                <span>
+                  {game.location}
+                  {meta?.km != null ? ` · ${formatKm(meta.km)}` : ''}
+                  {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
+                </span>
                 <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
                   Detaljer
                 </a>
@@ -899,14 +1153,24 @@ function CompetitionBlock({
 function TeamSide({
   team,
   align,
+  onSelectTeam,
 }: {
   team: Competition['games'][number]['homeTeam']
   align: 'start' | 'end'
+  onSelectTeam: (name: string) => void
 }) {
+  const name = team.name.trim()
   return (
     <div className={`team team-${align}`}>
       <img src={team.teamImageUrl} alt="" width={36} height={36} loading="lazy" />
-      <span>{team.name.trim()}</span>
+      <button
+        type="button"
+        className="team-link"
+        title={`Visa alla matcher för ${name}`}
+        onClick={() => onSelectTeam(name)}
+      >
+        {name}
+      </button>
     </div>
   )
 }

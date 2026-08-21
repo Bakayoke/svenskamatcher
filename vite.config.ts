@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { getMatches } from './server/matches.ts'
+import { geocodePlace, weatherAt } from './server/places.ts'
 
 function sendJson(res: import('http').ServerResponse, status: number, data: unknown) {
   res.statusCode = status
@@ -28,6 +29,28 @@ function matchesApiPlugin(): Plugin {
             const payload = await getMatches(from, to)
             res.setHeader('Cache-Control', 'public, max-age=60')
             sendJson(res, 200, payload)
+            return
+          }
+
+          if (url.pathname.startsWith('/api/geocode')) {
+            const q = url.searchParams.get('q') ?? ''
+            const point = await geocodePlace(q)
+            res.setHeader('Cache-Control', 'public, max-age=86400')
+            sendJson(res, 200, { point })
+            return
+          }
+
+          if (url.pathname.startsWith('/api/weather')) {
+            const lat = Number(url.searchParams.get('lat'))
+            const lon = Number(url.searchParams.get('lon'))
+            const at = url.searchParams.get('at') ?? ''
+            if (!Number.isFinite(lat) || !Number.isFinite(lon) || !at) {
+              sendJson(res, 400, { error: 'lat, lon och at krävs' })
+              return
+            }
+            const weather = await weatherAt(lat, lon, at)
+            res.setHeader('Cache-Control', 'public, max-age=1800')
+            sendJson(res, 200, weather)
             return
           }
 

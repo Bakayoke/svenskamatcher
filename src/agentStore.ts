@@ -3,6 +3,17 @@ import type { FlatGame } from './filters'
 const WATCH_KEY = 'sm.watchTeams'
 const SHORT_KEY = 'sm.shortlist'
 const NOTES_KEY = 'sm.notes'
+const BASE_KEY = 'sm.basePlace'
+const VENUE_GEO_KEY = 'sm.venueGeo'
+
+export type BasePlace = {
+  query: string
+  lat: number
+  lon: number
+  label: string
+}
+
+export type VenueGeoCache = Record<string, { lat: number; lon: number; label: string }>
 
 export type ShortlistedMatch = {
   gameId: number
@@ -88,6 +99,23 @@ export function saveNote(gameId: number, note: string, current: Record<string, s
   else next[key] = note
   writeJson(NOTES_KEY, next)
   return next
+}
+
+export function loadBasePlace(): BasePlace | null {
+  return readJson<BasePlace | null>(BASE_KEY, null)
+}
+
+export function saveBasePlace(place: BasePlace | null) {
+  if (!place) localStorage.removeItem(BASE_KEY)
+  else writeJson(BASE_KEY, place)
+}
+
+export function loadVenueGeoCache(): VenueGeoCache {
+  return readJson<VenueGeoCache>(VENUE_GEO_KEY, {})
+}
+
+export function saveVenueGeoCache(cache: VenueGeoCache) {
+  writeJson(VENUE_GEO_KEY, cache)
 }
 
 export type ScoutPreset = 'all' | 'elit' | 'ungdom' | 'dam' | 'watch'
