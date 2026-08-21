@@ -5,6 +5,7 @@ export type Filters = {
   ageCategory: 'all' | string
   competitions: Set<number>
   query: string
+  districtId: 'all' | number
 }
 
 export const emptyFilters = (): Filters => ({
@@ -12,6 +13,7 @@ export const emptyFilters = (): Filters => ({
   ageCategory: 'all',
   competitions: new Set(),
   query: '',
+  districtId: 'all',
 })
 
 export function filterCompetitions(
@@ -32,16 +34,25 @@ export function filterCompetitions(
       return true
     })
     .map((c) => {
-      if (!q) return c
-      const competitionHit = c.name.toLowerCase().includes(q)
-      const games = competitionHit
-        ? c.games
-        : c.games.filter(
-            (g) =>
-              g.homeTeam.name.toLowerCase().includes(q) ||
-              g.awayTeam.name.toLowerCase().includes(q) ||
-              g.location.toLowerCase().includes(q),
-          )
+      let games = c.games
+      if (filters.districtId !== 'all') {
+        games = games.filter(
+          (g) =>
+            g.homeTeamClubAssociationId === filters.districtId ||
+            g.awayTeamClubAssociationId === filters.districtId,
+        )
+      }
+      if (q) {
+        const competitionHit = c.name.toLowerCase().includes(q)
+        games = competitionHit
+          ? games
+          : games.filter(
+              (g) =>
+                g.homeTeam.name.toLowerCase().includes(q) ||
+                g.awayTeam.name.toLowerCase().includes(q) ||
+                g.location.toLowerCase().includes(q),
+            )
+      }
       return { ...c, games }
     })
     .filter((c) => c.games.length > 0)
