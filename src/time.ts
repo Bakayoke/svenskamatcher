@@ -67,6 +67,28 @@ export function kickoffClock(dateStr: string): string {
   })
 }
 
+/** e.g. "fre 22 aug" */
+export function kickoffDayShort(dateStr: string): string {
+  return parseKickoff(dateStr).toLocaleDateString('sv-SE', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  })
+}
+
+/** e.g. "fredag 22 augusti" */
+export function kickoffDayLong(dateStr: string): string {
+  return parseKickoff(dateStr).toLocaleDateString('sv-SE', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  })
+}
+
+export function dayKey(dateStr: string): string {
+  return dateStr.slice(0, 10)
+}
+
 export type FocusMode = 'overview' | 'live' | 'soon' | 'all'
 
 export function filterByFocus(games: FlatGame[], focus: FocusMode, now = new Date()): FlatGame[] {

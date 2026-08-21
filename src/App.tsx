@@ -37,8 +37,11 @@ import type { Competition, MatchesPayload } from './types'
 import { matchUrl, statusLabel } from './types'
 import {
   countByPhase,
+  dayKey,
   filterByFocus,
   kickoffClock,
+  kickoffDayLong,
+  kickoffDayShort,
   matchPhase,
   phaseLabel,
   relativeKickoff,
@@ -275,6 +278,22 @@ export default function App() {
     mode === 'single' || isSameDay(from, to)
       ? format(from, 'd MMMM yyyy', { locale: sv })
       : `${format(from, 'd MMM', { locale: sv })} – ${format(to, 'd MMM yyyy', { locale: sv })}`
+  const multiDay = !isSameDay(from, to)
+  const showDayHeaders = multiDay && !(sortByDistance && basePlace)
+
+  const timelineSections = useMemo(() => {
+    if (!showDayHeaders) {
+      return [{ key: 'all', label: null as string | null, games: timeline }]
+    }
+    const sections: { key: string; label: string; games: FlatGame[] }[] = []
+    for (const game of timeline) {
+      const key = dayKey(game.date)
+      const last = sections[sections.length - 1]
+      if (last && last.key === key) last.games.push(game)
+      else sections.push({ key, label: kickoffDayLong(game.date), games: [game] })
+    }
+    return sections
+  }, [timeline, showDayHeaders])
 
   function goToday() {
     const today = new Date()
@@ -801,7 +820,9 @@ export default function App() {
               const meta = venueMeta.get(g.gameId)
               return (
                 <li key={g.gameId}>
-                  <strong>{kickoffClock(g.date)}</strong>{' '}
+                  <strong>
+                    {multiDay ? `${kickoffDayShort(g.date)} ${kickoffClock(g.date)}` : kickoffClock(g.date)}
+                  </strong>{' '}
                   {g.homeTeam.name.trim()} – {g.awayTeam.name.trim()}
                   <br />
                   <span>
@@ -832,31 +853,43 @@ export default function App() {
         )}
 
         {layout === 'timeline' ? (
-          <ul className="timeline">
-            {timeline.map((game, index) => (
-              <TimelineGame
-                key={game.gameId}
-                game={game}
-                now={now}
-                meta={venueMeta.get(game.gameId)}
-                watched={watchSet}
-                shortlisted={shortlistIds.has(game.gameId)}
-                note={notes[String(game.gameId)] ?? ''}
-                noteOpen={noteGameId === game.gameId}
-                onSelectTeam={(name) => {
-                  setClusterId(null)
-                  setTeamFocus(name)
-                }}
-                onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
-                onToggleShortlist={() => setShortlist(toggleShortlist(game, shortlist))}
-                onToggleNote={() =>
-                  setNoteGameId((id) => (id === game.gameId ? null : game.gameId))
-                }
-                onNoteChange={(value) => setNotes(saveNote(game.gameId, value, notes))}
-                style={{ animationDelay: `${Math.min(index, 16) * 28}ms` }}
-              />
+          <div className="timeline-wrap">
+            {timelineSections.map((section) => (
+              <section key={section.key} className="day-section">
+                {section.label && (
+                  <h3 className="day-heading">
+                    <time dateTime={section.key}>{section.label}</time>
+                  </h3>
+                )}
+                <ul className="timeline">
+                  {section.games.map((game, index) => (
+                    <TimelineGame
+                      key={game.gameId}
+                      game={game}
+                      now={now}
+                      showDate={multiDay && !showDayHeaders}
+                      meta={venueMeta.get(game.gameId)}
+                      watched={watchSet}
+                      shortlisted={shortlistIds.has(game.gameId)}
+                      note={notes[String(game.gameId)] ?? ''}
+                      noteOpen={noteGameId === game.gameId}
+                      onSelectTeam={(name) => {
+                        setClusterId(null)
+                        setTeamFocus(name)
+                      }}
+                      onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
+                      onToggleShortlist={() => setShortlist(toggleShortlist(game, shortlist))}
+                      onToggleNote={() =>
+                        setNoteGameId((id) => (id === game.gameId ? null : game.gameId))
+                      }
+                      onNoteChange={(value) => setNotes(saveNote(game.gameId, value, notes))}
+                      style={{ animationDelay: `${Math.min(index, 16) * 28}ms` }}
+                    />
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         ) : (
           <div className="competition-stack">
             {leagueListForLayout.map((competition, index) => (
@@ -864,6 +897,7 @@ export default function App() {
                 key={competition.competitionId}
                 competition={competition}
                 now={now}
+                showDate={multiDay}
                 venueMeta={venueMeta}
                 watched={watchSet}
                 shortlistIds={shortlistIds}
@@ -967,6 +1001,7 @@ function AgentActions({
 function TimelineGame({
   game,
   now,
+  showDate,
   meta,
   watched,
   shortlisted,
@@ -981,6 +1016,7 @@ function TimelineGame({
 }: {
   game: FlatGame
   now: Date
+  showDate?: boolean
   meta?: { km: number | null; weather: { summary: string } | null } | null
   watched: Set<string>
   shortlisted: boolean
@@ -998,6 +1034,7 @@ function TimelineGame({
   return (
     <li className={`timeline-game phase-${phase} ${shortlisted ? 'shortlisted' : ''}`} style={style}>
       <div className="tl-time">
+        {showDate && <span className="tl-day">{kickoffDayShort(game.date)}</span>}
         <span className="tl-clock">{kickoffClock(game.date)}</span>
         <span className={`tl-phase status-${game.status}`}>
           {phase === 'live' || phase === 'soon' ? phaseLabel(phase) : statusLabel(game.status)}
@@ -1051,6 +1088,7 @@ function TimelineGame({
 function CompetitionBlock({
   competition,
   now,
+  showDate,
   venueMeta,
   watched,
   shortlistIds,
@@ -1065,6 +1103,7 @@ function CompetitionBlock({
 }: {
   competition: Competition
   now: Date
+  showDate?: boolean
   venueMeta: Map<number, { km: number | null; weather: { summary: string } | null }>
   watched: Set<string>
   shortlistIds: Set<number>
@@ -1103,6 +1142,7 @@ function CompetitionBlock({
             >
               <div className="game-meta">
                 <time dateTime={game.date}>
+                  {showDate && <>{kickoffDayShort(game.date)} · </>}
                   {kickoffClock(game.date)}
                   {(phase === 'soon' || phase === 'live') && (
                     <> · {relativeKickoff(game.date, now)}</>
