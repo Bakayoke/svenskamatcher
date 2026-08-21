@@ -121,7 +121,33 @@ async function apiGet(
       status: res.status === 429 ? 429 : 502,
     })
   }
-  return res.json()
+  const data = (await res.json()) as {
+    errors?: Record<string, string> | string[] | string
+    response?: unknown
+  }
+  const err = data.errors
+  if (err && ((typeof err === 'object' && !Array.isArray(err) && Object.keys(err).length > 0) || (Array.isArray(err) && err.length > 0) || (typeof err === 'string' && err))) {
+    const message =
+      typeof err === 'string'
+        ? err
+        : Array.isArray(err)
+          ? err.join('; ')
+          : Object.entries(err)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join('; ')
+    const freeSeason =
+      /Free plans do not have access to this season/i.test(message) ||
+      /try from 2022 to 2024/i.test(message)
+    throw Object.assign(
+      new Error(
+        freeSeason
+          ? 'API-Football gratisplan täcker bara säsong 2022–2024 (inte 2026). Uppgradera planen eller använd SvFF-data tills vidare.'
+          : message,
+      ),
+      { status: freeSeason ? 402 : 502 },
+    )
+  }
+  return data
 }
 
 function currentSeason(): number {
