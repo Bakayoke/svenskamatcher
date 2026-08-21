@@ -1,4 +1,4 @@
-import { format, isSameDay } from 'date-fns'
+import { addDays, format, isSameDay } from 'date-fns'
 import { sv } from 'date-fns/locale'
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { DayPicker, type DateRange } from 'react-day-picker'
@@ -9,14 +9,27 @@ import {
   countGames,
   emptyFilters,
   filterCompetitions,
+  flattenGames,
   uniqueAgeCategories,
   type Filters,
+  type FlatGame,
 } from './filters'
 import type { Competition, MatchesPayload } from './types'
 import { matchUrl, statusLabel } from './types'
+import {
+  countByPhase,
+  filterByFocus,
+  kickoffClock,
+  matchPhase,
+  phaseLabel,
+  relativeKickoff,
+  sortForOverview,
+  type FocusMode,
+} from './time'
 import './App.css'
 
 type Mode = 'single' | 'range'
+type Layout = 'timeline' | 'league'
 
 const MAX_RANGE_DAYS = 14
 
@@ -30,6 +43,12 @@ function rangeLength(range: DateRange | undefined) {
   return Math.floor(ms / 86400000) + 1
 }
 
+function genderShort(name: string) {
+  if (name === 'Man') return 'Herr'
+  if (name === 'Kvinna') return 'Dam'
+  return name
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>('single')
   const [single, setSingle] = useState<Date>(() => new Date())
@@ -40,9 +59,16 @@ export default function App() {
   const [data, setData] = useState<MatchesPayload | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filters, setFilters] = useState<Filters>(emptyFilters)
+  const [filters, setFilters] = useState<Filters>(() => ({
+    ...emptyFilters(),
+    ageCategory: 'Senior',
+  }))
   const [leagueOpen, setLeagueOpen] = useState(false)
   const [months, setMonths] = useState(1)
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [layout, setLayout] = useState<Layout>('timeline')
+  const [focus, setFocus] = useState<FocusMode>('overview')
+  const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 720px)')
@@ -52,12 +78,18 @@ export default function App() {
     return () => mq.removeEventListener('change', sync)
   }, [])
 
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
+
   const from = mode === 'single' ? single : (range?.from ?? single)
   const to = mode === 'single' ? single : (range?.to ?? range?.from ?? single)
   const fromIso = toIsoDate(from)
   const toIso = toIsoDate(to)
   const canFetch =
     mode === 'single' || Boolean(range?.from && range?.to && rangeLength(range) <= MAX_RANGE_DAYS)
+  const viewingToday = isSameDay(from, now) && (mode === 'single' || isSameDay(to, now))
 
   useEffect(() => {
     if (!canFetch) return
@@ -74,7 +106,7 @@ export default function App() {
           ...emptyFilters(),
           query: prev.query,
           gender: prev.gender,
-          ageCategory: prev.ageCategory,
+          ageCategory: prev.ageCategory || 'Senior',
         }))
       })
       .catch((err: unknown) => {
@@ -91,19 +123,53 @@ export default function App() {
     }
   }, [canFetch, fromIso, toIso])
 
-  const filtered = useMemo(
+  // Soft refresh while looking at today
+  useEffect(() => {
+    if (!viewingToday || !canFetch) return
+    const id = window.setInterval(() => {
+      fetchMatches(fromIso, toIso)
+        .then((payload) => setData(payload))
+        .catch(() => {})
+    }, 90_000)
+    return () => window.clearInterval(id)
+  }, [viewingToday, canFetch, fromIso, toIso])
+
+  const filteredCompetitions = useMemo(
     () => filterCompetitions(data?.competitions ?? [], filters),
     [data, filters],
   )
 
+  const flat = useMemo(() => flattenGames(filteredCompetitions), [filteredCompetitions])
+  const focused = useMemo(() => filterByFocus(flat, focus, now), [flat, focus, now])
+  const timeline = useMemo(() => sortForOverview(focused, now), [focused, now])
+  const phases = useMemo(() => countByPhase(flat, now), [flat, now])
+
   const ages = useMemo(() => uniqueAgeCategories(data?.competitions ?? []), [data])
-  const gameCount = countGames(filtered)
+  const gameCount = focused.length
   const totalGames = countGames(data?.competitions ?? [])
 
   const dateHeadline =
     mode === 'single' || isSameDay(from, to)
       ? format(from, 'd MMMM yyyy', { locale: sv })
       : `${format(from, 'd MMM', { locale: sv })} – ${format(to, 'd MMM yyyy', { locale: sv })}`
+
+  function goToday() {
+    const today = new Date()
+    setMode('single')
+    setSingle(today)
+    setRange({ from: today, to: today })
+    setFocus('overview')
+    setCalendarOpen(false)
+  }
+
+  function goTomorrow() {
+    const d = addDays(new Date(), 1)
+    setMode('single')
+    setSingle(d)
+    setRange({ from: d, to: d })
+    setFocus('all')
+    setCalendarOpen(false)
+  }
 
   function toggleCompetition(id: number) {
     setFilters((prev) => {
@@ -114,86 +180,69 @@ export default function App() {
     })
   }
 
+  const leagueListForLayout =
+    layout === 'league'
+      ? filteredCompetitions
+          .map((c) => ({
+            ...c,
+            games: c.games.filter((g) => focused.some((f) => f.gameId === g.gameId)),
+          }))
+          .filter((c) => c.games.length > 0)
+      : []
+
   return (
     <div className="page">
       <header className="hero">
         <p className="eyebrow">Fotboll · Sverige</p>
         <h1 className="brand">Svenska Matcher</h1>
-        <p className="lede">
-          Välj datum eller intervall och filtrera fram herr, dam och ligor från hela
-          landet.
-        </p>
+        <p className="lede">Vad går nu, och vad startar snart.</p>
       </header>
 
-      <section className="controls" aria-label="Datum och filter">
-        <div className="panel calendar-panel">
-          <div className="mode-toggle" role="group" aria-label="Datumläge">
-            <button
-              type="button"
-              className={mode === 'single' ? 'active' : ''}
-              onClick={() => {
-                setMode('single')
-                setSingle(range?.from ?? single)
-              }}
-            >
-              Ett datum
-            </button>
-            <button
-              type="button"
-              className={mode === 'range' ? 'active' : ''}
-              onClick={() => {
-                setMode('range')
-                setRange({ from: single, to: single })
-              }}
-            >
-              Intervall
-            </button>
-          </div>
-
-          {mode === 'single' ? (
-            <DayPicker
-              mode="single"
-              locale={dayPickerSv}
-              selected={single}
-              onSelect={(d) => d && setSingle(d)}
-              defaultMonth={single}
-              weekStartsOn={1}
-            />
-          ) : (
-            <DayPicker
-              mode="range"
-              locale={dayPickerSv}
-              selected={range}
-              onSelect={setRange}
-              defaultMonth={range?.from ?? single}
-              weekStartsOn={1}
-              numberOfMonths={months}
-            />
-          )}
-
-          {mode === 'range' && range?.from && range?.to && rangeLength(range) > MAX_RANGE_DAYS && (
-            <p className="hint warn">
-              Max {MAX_RANGE_DAYS} dagar per sökning – välj ett kortare intervall.
-            </p>
-          )}
-          {mode === 'range' && range?.from && !range?.to && (
-            <p className="hint">Välj slutdatum i kalendern.</p>
-          )}
+      <section className="quickbar panel" aria-label="Snabbval">
+        <div className="quick-dates" role="group" aria-label="Datum">
+          <button type="button" className={`chip ${viewingToday ? 'active' : ''}`} onClick={goToday}>
+            Idag
+          </button>
+          <button
+            type="button"
+            className={`chip ${isSameDay(single, addDays(now, 1)) && mode === 'single' ? 'active' : ''}`}
+            onClick={goTomorrow}
+          >
+            Imorgon
+          </button>
+          <button
+            type="button"
+            className={`chip ${calendarOpen ? 'active' : ''}`}
+            onClick={() => setCalendarOpen((o) => !o)}
+            aria-expanded={calendarOpen}
+          >
+            Byt datum
+          </button>
         </div>
 
-        <div className="panel filters-panel">
-          <h2>Filter</h2>
-          <label className="field">
-            <span>Sök lag, arena eller liga</span>
-            <input
-              type="search"
-              placeholder="t.ex. Sirius, Studenternas, Allsvenskan"
-              value={filters.query}
-              onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
-            />
-          </label>
+        <div className="focus-row" role="group" aria-label="Visa">
+          {(
+            [
+              ['overview', 'Kommande', phases.live + phases.soon + phases.later],
+              ['live', 'Pågår', phases.live],
+              ['soon', 'Nu & snart', phases.live + phases.soon],
+              ['all', 'Alla', flat.length],
+            ] as const
+          ).map(([key, label, count]) => (
+            <button
+              key={key}
+              type="button"
+              className={`chip focus-chip ${focus === key ? 'active' : ''} ${key === 'live' && phases.live > 0 ? 'has-live' : ''}`}
+              onClick={() => setFocus(key)}
+            >
+              {label}
+              <span className="count">{count}</span>
+            </button>
+          ))}
+        </div>
 
-          <div className="chip-row" role="group" aria-label="Kön">
+        <div className="layout-row">
+          <div className="chip-row tight" role="group" aria-label="Kön">
             {(['all', 'Man', 'Kvinna'] as const).map((g) => (
               <button
                 key={g}
@@ -205,7 +254,36 @@ export default function App() {
               </button>
             ))}
           </div>
+          <div className="chip-row tight" role="group" aria-label="Vy">
+            <button
+              type="button"
+              className={`chip ${layout === 'timeline' ? 'active' : ''}`}
+              onClick={() => setLayout('timeline')}
+            >
+              Tidslinje
+            </button>
+            <button
+              type="button"
+              className={`chip ${layout === 'league' ? 'active' : ''}`}
+              onClick={() => setLayout('league')}
+            >
+              Per liga
+            </button>
+          </div>
+        </div>
 
+        <label className="field compact">
+          <span className="sr-only">Sök lag, arena eller liga</span>
+          <input
+            type="search"
+            placeholder="Sök lag, arena eller liga…"
+            value={filters.query}
+            onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
+          />
+        </label>
+
+        <details className="more-filters">
+          <summary>Fler filter</summary>
           <div className="chip-row" role="group" aria-label="Ålderskategori">
             <button
               type="button"
@@ -235,9 +313,7 @@ export default function App() {
             >
               Ligor
               <span>
-                {filters.competitions.size > 0
-                  ? `${filters.competitions.size} valda`
-                  : 'Alla'}
+                {filters.competitions.size > 0 ? `${filters.competitions.size} valda` : 'Alla'}
               </span>
             </button>
             {leagueOpen && (
@@ -256,8 +332,7 @@ export default function App() {
                     <span>
                       <strong>{c.name}</strong>
                       <small>
-                        {c.genderName === 'Man' ? 'Herr' : c.genderName === 'Kvinna' ? 'Dam' : c.genderName} ·{' '}
-                        {c.ageCategoryName} · {c.games.length} matcher
+                        {genderShort(c.genderName)} · {c.ageCategoryName} · {c.games.length} matcher
                       </small>
                     </span>
                   </label>
@@ -266,9 +341,7 @@ export default function App() {
                   <button
                     type="button"
                     className="text-btn"
-                    onClick={() =>
-                      setFilters((f) => ({ ...f, competitions: new Set() }))
-                    }
+                    onClick={() => setFilters((f) => ({ ...f, competitions: new Set() }))}
                   >
                     Rensa ligaval
                   </button>
@@ -276,8 +349,68 @@ export default function App() {
               </div>
             )}
           </div>
-        </div>
+        </details>
       </section>
+
+      {calendarOpen && (
+        <section className="controls calendar-open" aria-label="Kalender">
+          <div className="panel calendar-panel">
+            <div className="mode-toggle" role="group" aria-label="Datumläge">
+              <button
+                type="button"
+                className={mode === 'single' ? 'active' : ''}
+                onClick={() => {
+                  setMode('single')
+                  setSingle(range?.from ?? single)
+                }}
+              >
+                Ett datum
+              </button>
+              <button
+                type="button"
+                className={mode === 'range' ? 'active' : ''}
+                onClick={() => {
+                  setMode('range')
+                  setRange({ from: single, to: single })
+                }}
+              >
+                Intervall
+              </button>
+            </div>
+
+            {mode === 'single' ? (
+              <DayPicker
+                mode="single"
+                locale={dayPickerSv}
+                selected={single}
+                onSelect={(d) => {
+                  if (!d) return
+                  setSingle(d)
+                  setCalendarOpen(false)
+                }}
+                defaultMonth={single}
+                weekStartsOn={1}
+              />
+            ) : (
+              <DayPicker
+                mode="range"
+                locale={dayPickerSv}
+                selected={range}
+                onSelect={setRange}
+                defaultMonth={range?.from ?? single}
+                weekStartsOn={1}
+                numberOfMonths={months}
+              />
+            )}
+
+            {mode === 'range' && range?.from && range?.to && rangeLength(range) > MAX_RANGE_DAYS && (
+              <p className="hint warn">
+                Max {MAX_RANGE_DAYS} dagar per sökning – välj ett kortare intervall.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="results" aria-live="polite">
         <div className="results-head">
@@ -288,7 +421,9 @@ export default function App() {
                 ? 'Hämtar matcher…'
                 : error
                   ? 'Kunde inte ladda'
-                  : `${gameCount} matcher${gameCount !== totalGames ? ` av ${totalGames}` : ''} · ${filtered.length} tävlingar`}
+                  : `${gameCount} matcher${gameCount !== totalGames ? ` av ${totalGames}` : ''}${
+                      phases.live > 0 ? ` · ${phases.live} pågår` : ''
+                    }${phases.soon > 0 ? ` · ${phases.soon} snart` : ''}`}
             </p>
           </div>
           {loading && <div className="spinner" aria-hidden />}
@@ -296,19 +431,39 @@ export default function App() {
 
         {error && <p className="error-box">{error}</p>}
 
-        {!loading && !error && filtered.length === 0 && (
-          <p className="empty">Inga matcher matchar filtren för valt datum.</p>
+        {!loading && !error && gameCount === 0 && (
+          <p className="empty">
+            {focus === 'live'
+              ? 'Inga matcher pågår just nu.'
+              : focus === 'soon'
+                ? 'Inga matcher inom två timmar.'
+                : 'Inga matcher matchar filtren.'}
+          </p>
         )}
 
-        <div className="competition-stack">
-          {filtered.map((competition, index) => (
-            <CompetitionBlock
-              key={competition.competitionId}
-              competition={competition}
-              style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
-            />
-          ))}
-        </div>
+        {layout === 'timeline' ? (
+          <ul className="timeline">
+            {timeline.map((game, index) => (
+              <TimelineGame
+                key={game.gameId}
+                game={game}
+                now={now}
+                style={{ animationDelay: `${Math.min(index, 16) * 28}ms` }}
+              />
+            ))}
+          </ul>
+        ) : (
+          <div className="competition-stack">
+            {leagueListForLayout.map((competition, index) => (
+              <CompetitionBlock
+                key={competition.competitionId}
+                competition={competition}
+                now={now}
+                style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       <footer className="footer">
@@ -323,11 +478,61 @@ export default function App() {
   )
 }
 
+function TimelineGame({
+  game,
+  now,
+  style,
+}: {
+  game: FlatGame
+  now: Date
+  style?: CSSProperties
+}) {
+  const phase = matchPhase(game, now)
+  return (
+    <li className={`timeline-game phase-${phase}`} style={style}>
+      <div className="tl-time">
+        <span className="tl-clock">{kickoffClock(game.date)}</span>
+        <span className={`tl-phase status-${game.status}`}>
+          {phase === 'live' || phase === 'soon' ? phaseLabel(phase) : statusLabel(game.status)}
+        </span>
+        {(phase === 'soon' || phase === 'live') && (
+          <span className="tl-rel">{relativeKickoff(game.date, now)}</span>
+        )}
+      </div>
+      <div className="tl-body">
+        <p className="tl-league">
+          {game.competitionName}
+          <span>
+            {genderShort(game.genderName)} · {game.ageCategoryName}
+          </span>
+        </p>
+        <div className="teams compact">
+          <TeamSide team={game.homeTeam} align="end" />
+          <div className="score" aria-label="Resultat">
+            <span>{game.score.home}</span>
+            <span className="sep">–</span>
+            <span>{game.score.away}</span>
+          </div>
+          <TeamSide team={game.awayTeam} align="start" />
+        </div>
+        <div className="game-foot">
+          <span>{game.location}</span>
+          <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
+            Detaljer
+          </a>
+        </div>
+      </div>
+    </li>
+  )
+}
+
 function CompetitionBlock({
   competition,
+  now,
   style,
 }: {
   competition: Competition
+  now: Date
   style?: CSSProperties
 }) {
   return (
@@ -335,38 +540,43 @@ function CompetitionBlock({
       <header className="competition-head">
         <h3>{competition.name}</h3>
         <p>
-          {competition.genderName === 'Man'
-            ? 'Herr'
-            : competition.genderName === 'Kvinna'
-              ? 'Dam'
-              : competition.genderName}{' '}
-          · {competition.ageCategoryName}
+          {genderShort(competition.genderName)} · {competition.ageCategoryName}
         </p>
       </header>
-      <ul className="games-list">
-        {competition.games.map((game) => (
-          <li key={game.gameId} className="game">
-            <div className="game-meta">
-              <time dateTime={game.date}>{game.dateFormatted}</time>
-              <span className={`status status-${game.status}`}>{statusLabel(game.status)}</span>
-            </div>
-            <div className="teams">
-              <TeamSide team={game.homeTeam} align="end" />
-              <div className="score" aria-label="Resultat">
-                <span>{game.score.home}</span>
-                <span className="sep">–</span>
-                <span>{game.score.away}</span>
+      <ul className="game-list">
+        {competition.games.map((game) => {
+          const phase = matchPhase(game, now)
+          return (
+            <li key={game.gameId} className={`game phase-${phase}`}>
+              <div className="game-meta">
+                <time dateTime={game.date}>
+                  {kickoffClock(game.date)}
+                  {(phase === 'soon' || phase === 'live') && (
+                    <> · {relativeKickoff(game.date, now)}</>
+                  )}
+                </time>
+                <span className={`status status-${game.status}`}>
+                  {phase === 'live' || phase === 'soon' ? phaseLabel(phase) : statusLabel(game.status)}
+                </span>
               </div>
-              <TeamSide team={game.awayTeam} align="start" />
-            </div>
-            <div className="game-foot">
-              <span>{game.location}</span>
-              <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
-                Detaljer
-              </a>
-            </div>
-          </li>
-        ))}
+              <div className="teams">
+                <TeamSide team={game.homeTeam} align="end" />
+                <div className="score" aria-label="Resultat">
+                  <span>{game.score.home}</span>
+                  <span className="sep">–</span>
+                  <span>{game.score.away}</span>
+                </div>
+                <TeamSide team={game.awayTeam} align="start" />
+              </div>
+              <div className="game-foot">
+                <span>{game.location}</span>
+                <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
+                  Detaljer
+                </a>
+              </div>
+            </li>
+          )
+        })}
       </ul>
     </article>
   )

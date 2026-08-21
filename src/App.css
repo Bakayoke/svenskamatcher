@@ -4,9 +4,21 @@
   padding: 2.5rem 0 4rem;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .hero {
   animation: rise-in 0.7s ease both;
-  margin-bottom: 2rem;
+  margin-bottom: 1.25rem;
 }
 
 .eyebrow {
@@ -48,10 +60,74 @@
   line-height: 1.45;
 }
 
+.quickbar {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+  animation: rise-in 0.7s ease 0.05s both;
+}
+
+.quick-dates,
+.focus-row,
+.layout-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.layout-row {
+  justify-content: space-between;
+}
+
+.chip-row.tight {
+  margin-bottom: 0;
+}
+
+.focus-chip .count {
+  margin-left: 0.35rem;
+  opacity: 0.75;
+  font-weight: 600;
+  font-size: 0.85em;
+}
+
+.focus-chip.has-live {
+  box-shadow: 0 0 0 2px rgba(254, 203, 0, 0.55);
+}
+
+.field.compact {
+  margin-bottom: 0;
+}
+
+.field.compact span {
+  display: none;
+}
+
+.more-filters {
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+
+.more-filters summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--blue);
+  list-style: none;
+}
+
+.more-filters summary::-webkit-details-marker {
+  display: none;
+}
+
+.more-filters[open] summary {
+  margin-bottom: 0.65rem;
+}
+
 .controls {
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
+  grid-template-columns: 1fr;
   gap: 1.1rem;
+  margin-bottom: 1rem;
   animation: rise-in 0.75s ease 0.08s both;
 }
 
@@ -100,14 +176,6 @@
   font-weight: 600;
 }
 
-.filters-panel h2 {
-  margin: 0 0 0.9rem;
-  font-family: var(--font-display);
-  font-size: 1.55rem;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
 .field {
   display: grid;
   gap: 0.35rem;
@@ -125,6 +193,7 @@
   border-radius: 10px;
   padding: 0.7rem 0.85rem;
   background: #fff;
+  width: 100%;
 }
 
 .field input:focus {
@@ -212,7 +281,7 @@
 }
 
 .results {
-  margin-top: 2rem;
+  margin-top: 1.25rem;
   animation: rise-in 0.8s ease 0.14s both;
 }
 
@@ -266,6 +335,85 @@
   font-weight: 600;
 }
 
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.timeline-game {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 0.85rem;
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.85rem 1rem;
+  animation: rise-in 0.45s ease both;
+  border-left: 4px solid transparent;
+}
+
+.timeline-game.phase-live {
+  border-left-color: #e53935;
+  background: linear-gradient(90deg, rgba(229, 57, 53, 0.08), var(--panel) 28%);
+}
+
+.timeline-game.phase-soon {
+  border-left-color: var(--yellow);
+}
+
+.tl-time {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-top: 0.15rem;
+}
+
+.tl-clock {
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.tl-phase {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tl-rel {
+  font-size: 0.8rem;
+  color: #5a655e;
+}
+
+.tl-league {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  color: #5a655e;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+}
+
+.tl-league span {
+  opacity: 0.85;
+}
+
+.teams.compact {
+  gap: 0.55rem;
+}
+
+.phase-live .tl-phase,
+.status-2,
+.status-3 {
+  color: #c62828;
+}
+
 .competition-stack {
   display: grid;
   gap: 1rem;
@@ -315,6 +463,10 @@
   border-bottom: 0;
 }
 
+.game.phase-live {
+  background: rgba(229, 57, 53, 0.06);
+}
+
 .game-meta {
   display: flex;
   justify-content: space-between;
@@ -335,11 +487,6 @@
 
 .status-1 {
   color: var(--ok);
-}
-
-.status-2,
-.status-3 {
-  color: #b35c1a;
 }
 
 .teams {
@@ -445,9 +592,17 @@
   border: 2px solid var(--yellow);
 }
 
-@media (max-width: 900px) {
-  .controls {
+@media (max-width: 720px) {
+  .timeline-game {
     grid-template-columns: 1fr;
+    gap: 0.45rem;
+  }
+
+  .tl-time {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.45rem 0.75rem;
   }
 }
 
@@ -455,6 +610,11 @@
   .page {
     width: min(100% - 1.25rem, 1120px);
     padding-top: 1.5rem;
+  }
+
+  .layout-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .teams {
