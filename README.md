@@ -27,16 +27,6 @@ npm run deploy
 
 Custom domains (`svenskamatcher.com` / `www`) sätts via `routes` i `wrangler.toml` med `custom_domain = true`.
 
-## API-Football (gratis)
-
-För live score, lineups, ratings och transfers på **Allsvenskan / Superettan / Damallsvenskan / Elitettan**:
-
-1. Skapa gratis konto: https://dashboard.api-football.com (100 anrop/dag)
-2. Lokalt: kopiera `.dev.vars.example` → `.dev.vars` och sätt `API_FOOTBALL_KEY`
-3. Produktion: `npx wrangler secret put API_FOOTBALL_KEY`
-
-Anrop cacheas aggressivt så gratisplanen räcker för normal användning.
-
 ## Kom igång (lokalt)
 
 ```bash
