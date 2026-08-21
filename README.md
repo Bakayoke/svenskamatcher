@@ -14,27 +14,18 @@ Den här appen proxar website-endpointen med cache och begränsat intervall (max
 ## Stack
 
 - React + Vite (frontend)
-- Express (proxy `/api/matches`)
+- Cloudflare Worker (API-proxy + static assets) — samma upplägg som övriga sidor
 - `react-day-picker` för kalender
 
-## Deploy (Cloudflare Pages)
+## Deploy (Cloudflare Workers)
 
-Ingen separat backend behövs. API-proxyn körs som **Pages Functions** (`/functions/api/*`).
+Ingen Railway behövs. API-proxyn körs i samma Worker som frontend.
 
 ```bash
 npm run deploy
 ```
 
-Live:
-- https://svenskamatcher.pages.dev
-- Custom domain: koppla `svenskamatcher.com` under Pages → Custom domains
-
-DNS (om Cloudflare inte skapar dem automatiskt):
-
-| Type  | Name | Target                     | Proxy |
-| ----- | ---- | -------------------------- | ----- |
-| CNAME | `@`  | `svenskamatcher.pages.dev` | On    |
-| CNAME | `www`| `svenskamatcher.pages.dev` | On    |
+Custom domains (`svenskamatcher.com` / `www`) sätts via `routes` i `wrangler.toml` med `custom_domain = true`.
 
 ## Kom igång (lokalt)
 
@@ -43,18 +34,15 @@ npm install
 npm run dev
 ```
 
-Öppna [http://localhost:5175](http://localhost:5175). I utvecklingsläge proxas SvFF via Vite-middleware (ingen separat API-process behövs).
-
-För produktionsliknande proxy: `npm run api` (port `8787`).
+Öppna [http://localhost:5175](http://localhost:5175). I utvecklingsläge proxas SvFF via Vite-middleware.
 
 ## Scripts
 
-| Script        | Beskrivning                          |
-| ------------- | ------------------------------------ |
-| `npm run dev` | Frontend + API samtidigt             |
-| `npm run api` | Endast proxy-server                  |
-| `npm run build` | Bygg frontend                      |
-| `npm start`   | Kör API (förutsätter byggd frontend om du serverar den separat) |
+| Script          | Beskrivning                |
+| --------------- | -------------------------- |
+| `npm run dev`   | Lokal frontend + API       |
+| `npm run build` | Bygg frontend              |
+| `npm run deploy`| Bygg + deploy till Cloudflare |
 
 ## Filter
 

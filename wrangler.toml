@@ -1,3 +1,16 @@
 name = "svenskamatcher"
 compatibility_date = "2026-08-21"
-pages_build_output_dir = "./dist"
+main = "worker/index.ts"
+workers_dev = true
+preview_urls = true
+
+routes = [
+  { pattern = "svenskamatcher.com", custom_domain = true },
+  { pattern = "www.svenskamatcher.com", custom_domain = true },
+]
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]

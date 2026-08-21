@@ -10,9 +10,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "start": "tsx server/index.ts",
-    "deploy": "npm run build && wrangler pages deploy",
-    "cf:login": "wrangler login",
-    "cf:dev": "wrangler pages dev dist --compatibility-date=2026-08-21"
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:cf": "npm run deploy",
+    "cf:login": "wrangler login"
   },
   "dependencies": {
     "cors": "^2.8.6",
