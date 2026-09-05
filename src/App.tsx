@@ -5,19 +5,29 @@ import { DayPicker, type DateRange } from 'react-day-picker'
 import { sv as dayPickerSv } from 'react-day-picker/locale'
 import 'react-day-picker/style.css'
 import {
+  addSavedView,
+  dismissTomorrowBanner,
+  isTomorrowBannerDismissed,
   loadBasePlace,
+  loadLastSession,
   loadNotes,
+  loadSavedViews,
   loadShortlist,
   loadWatchTeams,
   matchesPreset,
+  removeSavedView,
   saveBasePlace,
+  saveLastSession,
   saveNote,
+  saveShortlist,
   toggleShortlist,
   toggleWatchTeam,
   type BasePlace,
+  type SavedView,
   type ScoutPreset,
   type ShortlistedMatch,
 } from './agentStore'
+import { decodeShortlist, mergeShortlists, shortlistShareUrl } from './shareShortlist'
 import { fetchMatches } from './api'
 import { buildClusters } from './clusters'
 import { districtName } from './districts'
@@ -71,25 +81,43 @@ function genderShort(name: string) {
 
 function initialFromUrl() {
   const u = readUrlState()
+  const session = loadLastSession()
+  const watched = loadWatchTeams()
+  const bare =
+    !u.from && !u.to && !u.preset && !u.focus && !u.gender && !u.age && !u.q && !u.district && !u.lista
   const today = new Date()
-  const from = parseDateParam(u.from, today)
-  const to = parseDateParam(u.to, from)
+  const from = parseDateParam(
+    u.from ?? (bare ? session?.from : undefined),
+    today,
+  )
+  const to = parseDateParam(
+    u.to ?? (bare ? session?.to : undefined),
+    from,
+  )
   const singleDay = isSameDay(from, to)
+  const defaultPreset: ScoutPreset =
+    watched.length > 0 ? 'watch' : ((session?.preset as ScoutPreset | undefined) ?? 'all')
   return {
     mode: (singleDay ? 'single' : 'range') as Mode,
     single: from,
     range: { from, to } as DateRange,
-    focus: (u.focus ?? 'overview') as FocusMode,
-    preset: (u.preset ?? 'all') as ScoutPreset,
-    layout: (u.layout ?? 'timeline') as Layout,
-    showShortlistOnly: u.shortlist === '1',
+    focus: (u.focus ?? (bare ? (session?.focus as FocusMode | undefined) : undefined) ?? 'overview') as FocusMode,
+    preset: (u.preset ?? (bare ? session?.preset : undefined) ?? defaultPreset) as ScoutPreset,
+    layout: (u.layout ?? (bare ? session?.layout : undefined) ?? 'timeline') as Layout,
+    showShortlistOnly: u.shortlist === '1' || Boolean(u.lista),
     filters: {
       ...emptyFilters(),
-      gender: u.gender ?? 'all',
-      ageCategory: u.age ?? 'all',
-      query: u.q ?? '',
-      districtId: u.district && u.district !== 'all' ? Number(u.district) : 'all',
+      gender: u.gender ?? (bare ? session?.gender : undefined) ?? 'all',
+      ageCategory: u.age ?? (bare ? session?.ageCategory : undefined) ?? 'all',
+      query: u.q ?? (bare ? session?.query : undefined) ?? '',
+      districtId:
+        u.district && u.district !== 'all'
+          ? Number(u.district)
+          : bare && session?.districtId != null
+            ? session.districtId
+            : 'all',
     } as Filters,
+    sharedLista: u.lista,
   }
 }
 
@@ -122,6 +150,26 @@ export default function App() {
   const [baseBusy, setBaseBusy] = useState(false)
   const [baseError, setBaseError] = useState<string | null>(null)
   const [sortByDistance, setSortByDistance] = useState(false)
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => loadSavedViews())
+  const [viewNameDraft, setViewNameDraft] = useState('')
+  const [listaCopied, setListaCopied] = useState(false)
+  const [importNotice, setImportNotice] = useState<string | null>(null)
+  const [tomorrowWatchCount, setTomorrowWatchCount] = useState<number | null>(null)
+  const [showTomorrowBanner, setShowTomorrowBanner] = useState(false)
+
+  useEffect(() => {
+    if (!boot.sharedLista) return
+    const decoded = decodeShortlist(boot.sharedLista)
+    if (!decoded?.length) {
+      setImportNotice('Kunde inte läsa den delade scoutlistan.')
+      return
+    }
+    const merged = mergeShortlists(loadShortlist(), decoded)
+    saveShortlist(merged)
+    setShortlist(merged)
+    setShowShortlistOnly(true)
+    setImportNotice(`Importerade ${decoded.length} matcher från delad scoutlista.`)
+  }, [boot.sharedLista])
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 720px)')
@@ -158,6 +206,52 @@ export default function App() {
       shortlist: showShortlistOnly ? '1' : undefined,
     })
   }, [fromIso, toIso, focus, preset, filters, layout, showShortlistOnly])
+
+  useEffect(() => {
+    saveLastSession({
+      from: fromIso,
+      to: toIso,
+      preset,
+      focus,
+      gender: filters.gender,
+      ageCategory: filters.ageCategory,
+      districtId: filters.districtId,
+      query: filters.query,
+      layout,
+      savedAt: new Date().toISOString(),
+    })
+  }, [fromIso, toIso, preset, focus, filters, layout])
+
+  useEffect(() => {
+    if (watchTeams.length === 0) {
+      setTomorrowWatchCount(null)
+      setShowTomorrowBanner(false)
+      return
+    }
+    const tomorrow = addDays(new Date(), 1)
+    const dayIso = toDateParam(tomorrow)
+    if (isTomorrowBannerDismissed(dayIso)) {
+      setShowTomorrowBanner(false)
+      return
+    }
+    let cancelled = false
+    fetchMatches(dayIso, dayIso)
+      .then((payload) => {
+        if (cancelled) return
+        const games = flattenGames(payload.competitions ?? [])
+        const count = games.filter((g) => matchesPreset(g, 'watch', watchTeams)).length
+        setTomorrowWatchCount(count)
+        const alreadyOnTomorrow =
+          mode === 'single' && isSameDay(single, tomorrow) && preset === 'watch'
+        setShowTomorrowBanner(count > 0 && !alreadyOnTomorrow)
+      })
+      .catch(() => {
+        if (!cancelled) setTomorrowWatchCount(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [watchTeams, mode, single, preset])
 
   useEffect(() => {
     if (!canFetch) return
@@ -301,6 +395,7 @@ export default function App() {
     setSingle(today)
     setRange({ from: today, to: today })
     setFocus('overview')
+    if (watchTeams.length > 0) setPreset('watch')
     setCalendarOpen(false)
   }
 
@@ -310,6 +405,7 @@ export default function App() {
     setSingle(d)
     setRange({ from: d, to: d })
     setFocus('all')
+    if (watchTeams.length > 0) setPreset('watch')
     setCalendarOpen(false)
   }
 
@@ -326,6 +422,60 @@ export default function App() {
     await navigator.clipboard.writeText(window.location.href)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  async function copyShortlistShareLink() {
+    if (shortlist.length === 0) return
+    await navigator.clipboard.writeText(shortlistShareUrl(shortlist))
+    setListaCopied(true)
+    window.setTimeout(() => setListaCopied(false), 1800)
+  }
+
+  function applySavedView(view: SavedView) {
+    setFilters((f) => ({
+      ...f,
+      gender: view.gender,
+      ageCategory: view.ageCategory,
+      districtId: view.districtId,
+      query: view.query,
+      competitions: new Set(),
+    }))
+    setPreset(view.preset)
+    setTeamFocus(null)
+    setClusterId(null)
+  }
+
+  function saveCurrentView() {
+    const name = viewNameDraft.trim()
+    if (!name) return
+    setSavedViews(
+      addSavedView(
+        {
+          name,
+          gender: filters.gender,
+          ageCategory: filters.ageCategory,
+          districtId: filters.districtId,
+          query: filters.query,
+          preset,
+        },
+        savedViews,
+      ),
+    )
+    setViewNameDraft('')
+  }
+
+  function openTomorrowWatch() {
+    const d = addDays(new Date(), 1)
+    setMode('single')
+    setSingle(d)
+    setRange({ from: d, to: d })
+    setPreset('watch')
+    setFocus('all')
+    setShowShortlistOnly(false)
+    setTeamFocus(null)
+    setClusterId(null)
+    setCalendarOpen(false)
+    setShowTomorrowBanner(false)
   }
 
   function exportShortlistIcs() {
@@ -402,6 +552,38 @@ export default function App() {
         </p>
       </header>
 
+      {showTomorrowBanner && tomorrowWatchCount != null && tomorrowWatchCount > 0 && (
+        <div className="return-banner panel no-print" role="status">
+          <p>
+            Imorgon: <strong>{tomorrowWatchCount}</strong> matcher för dina bevakade lag.
+          </p>
+          <div className="return-actions">
+            <button type="button" className="chip active" onClick={openTomorrowWatch}>
+              Visa imorgon
+            </button>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                dismissTomorrowBanner(toDateParam(addDays(new Date(), 1)))
+                setShowTomorrowBanner(false)
+              }}
+            >
+              Senare
+            </button>
+          </div>
+        </div>
+      )}
+
+      {importNotice && (
+        <div className="return-banner panel no-print" role="status">
+          <p>{importNotice}</p>
+          <button type="button" className="chip" onClick={() => setImportNotice(null)}>
+            Stäng
+          </button>
+        </div>
+      )}
+
       <section className="quickbar panel" aria-label="Scoutverktyg">
         <div className="quick-dates" role="group" aria-label="Datum">
           <button type="button" className={`chip ${viewingToday ? 'active' : ''}`} onClick={goToday}>
@@ -476,6 +658,9 @@ export default function App() {
           </button>
           {shortlist.length > 0 && (
             <>
+              <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
+                {listaCopied ? 'Listlänk kopierad' : 'Dela scoutlista'}
+              </button>
               <button type="button" className="chip" onClick={exportShortlistIcs}>
                 Exportera .ics
               </button>
@@ -624,6 +809,48 @@ export default function App() {
               Bevakade lag: {watchTeams.join(', ')}
             </p>
           )}
+
+          <div className="saved-views">
+            <label className="field">
+              <span>Sparade vyer</span>
+              <div className="base-row">
+                <input
+                  type="text"
+                  placeholder="Namn, t.ex. Stockholm ungdom"
+                  value={viewNameDraft}
+                  onChange={(e) => setViewNameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      saveCurrentView()
+                    }
+                  }}
+                />
+                <button type="button" className="chip" onClick={saveCurrentView}>
+                  Spara vy
+                </button>
+              </div>
+            </label>
+            {savedViews.length > 0 && (
+              <ul className="saved-view-list">
+                {savedViews.map((view) => (
+                  <li key={view.id}>
+                    <button type="button" className="chip" onClick={() => applySavedView(view)}>
+                      {view.name}
+                    </button>
+                    <button
+                      type="button"
+                      className="chip ghost"
+                      aria-label={`Ta bort ${view.name}`}
+                      onClick={() => setSavedViews(removeSavedView(view.id, savedViews))}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           <div className="base-place">
             <label className="field">
@@ -839,17 +1066,48 @@ export default function App() {
         </div>
 
         {!loading && !error && gameCount === 0 && (
-          <p className="empty">
-            {teamFocus
-              ? `Inga matcher för ${teamFocus} i valt intervall/filter.`
-              : showShortlistOnly
-                ? 'Scoutlistan är tom för valt datum/filter.'
-                : preset === 'watch'
-                  ? 'Inga matcher för bevakade lag. Stjärnmarkera lag i en matchrad.'
-                  : focus === 'live'
-                    ? 'Inga matcher pågår just nu.'
-                    : 'Inga matcher matchar filtren.'}
-          </p>
+          <div className="empty-box">
+            <p className="empty">
+              {teamFocus
+                ? `Inga matcher för ${teamFocus} i valt intervall/filter.`
+                : showShortlistOnly
+                  ? 'Scoutlistan är tom för valt datum/filter.'
+                  : preset === 'watch'
+                    ? watchTeams.length === 0
+                      ? 'Inga bevakade lag ännu.'
+                      : 'Inga matcher för bevakade lag just nu.'
+                    : focus === 'live'
+                      ? 'Inga matcher pågår just nu.'
+                      : 'Inga matcher matchar filtren.'}
+            </p>
+            <div className="empty-actions">
+              {preset === 'watch' && watchTeams.length === 0 && (
+                <p className="hint">
+                  Tipsa: öppna en match och tryck ★ Hem / ★ Borta — nästa gång startar du på Mina lag.
+                </p>
+              )}
+              {preset === 'watch' && watchTeams.length > 0 && (
+                <button type="button" className="chip" onClick={() => setPreset('all')}>
+                  Visa alla matcher
+                </button>
+              )}
+              {showShortlistOnly && (
+                <button type="button" className="chip" onClick={() => setShowShortlistOnly(false)}>
+                  Lämna scoutlistan
+                </button>
+              )}
+              {teamFocus && (
+                <button type="button" className="chip" onClick={() => setTeamFocus(null)}>
+                  Visa alla lag
+                </button>
+              )}
+              {!teamFocus && !showShortlistOnly && preset !== 'watch' && (
+                <button type="button" className="chip" onClick={goTomorrow}>
+                  Prova imorgon
+                </button>
+              )}
+            </div>
+          </div>
         )}
 
         {layout === 'timeline' ? (

@@ -13,6 +13,7 @@ export type UrlState = {
   district?: string
   layout?: 'timeline' | 'league'
   shortlist?: '1'
+  lista?: string
 }
 
 export function readUrlState(): UrlState {
@@ -29,6 +30,7 @@ export function readUrlState(): UrlState {
     district: get('district'),
     layout: get('layout') as UrlState['layout'],
     shortlist: get('shortlist') as '1' | undefined,
+    lista: get('lista'),
   }
 }
 

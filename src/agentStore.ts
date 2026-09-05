@@ -5,6 +5,9 @@ const SHORT_KEY = 'sm.shortlist'
 const NOTES_KEY = 'sm.notes'
 const BASE_KEY = 'sm.basePlace'
 const VENUE_GEO_KEY = 'sm.venueGeo'
+const VIEWS_KEY = 'sm.savedViews'
+const SESSION_KEY = 'sm.lastSession'
+const DISMISS_TOMORROW_KEY = 'sm.dismissTomorrow'
 
 export type BasePlace = {
   query: string
@@ -15,6 +18,8 @@ export type BasePlace = {
 
 export type VenueGeoCache = Record<string, { lat: number; lon: number; label: string }>
 
+export type ScoutPreset = 'all' | 'elit' | 'ungdom' | 'dam' | 'watch'
+
 export type ShortlistedMatch = {
   gameId: number
   date: string
@@ -23,6 +28,30 @@ export type ShortlistedMatch = {
   competitionName: string
   location: string
   url: string
+  savedAt: string
+}
+
+export type SavedView = {
+  id: string
+  name: string
+  gender: 'all' | 'Man' | 'Kvinna'
+  ageCategory: string
+  districtId: 'all' | number
+  query: string
+  preset: ScoutPreset
+  createdAt: string
+}
+
+export type LastSession = {
+  from: string
+  to: string
+  preset: ScoutPreset
+  focus: string
+  gender: 'all' | 'Man' | 'Kvinna'
+  ageCategory: string
+  districtId: 'all' | number
+  query: string
+  layout: 'timeline' | 'league'
   savedAt: string
 }
 
@@ -118,7 +147,51 @@ export function saveVenueGeoCache(cache: VenueGeoCache) {
   writeJson(VENUE_GEO_KEY, cache)
 }
 
-export type ScoutPreset = 'all' | 'elit' | 'ungdom' | 'dam' | 'watch'
+export function loadSavedViews(): SavedView[] {
+  return readJson<SavedView[]>(VIEWS_KEY, [])
+}
+
+export function saveSavedViews(views: SavedView[]) {
+  writeJson(VIEWS_KEY, views)
+}
+
+export function addSavedView(
+  view: Omit<SavedView, 'id' | 'createdAt'>,
+  current: SavedView[],
+): SavedView[] {
+  const next = [
+    {
+      ...view,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: new Date().toISOString(),
+    },
+    ...current,
+  ].slice(0, 12)
+  saveSavedViews(next)
+  return next
+}
+
+export function removeSavedView(id: string, current: SavedView[]): SavedView[] {
+  const next = current.filter((v) => v.id !== id)
+  saveSavedViews(next)
+  return next
+}
+
+export function loadLastSession(): LastSession | null {
+  return readJson<LastSession | null>(SESSION_KEY, null)
+}
+
+export function saveLastSession(session: LastSession) {
+  writeJson(SESSION_KEY, session)
+}
+
+export function isTomorrowBannerDismissed(dayIso: string): boolean {
+  return localStorage.getItem(DISMISS_TOMORROW_KEY) === dayIso
+}
+
+export function dismissTomorrowBanner(dayIso: string) {
+  localStorage.setItem(DISMISS_TOMORROW_KEY, dayIso)
+}
 
 const ELIT_RE =
   /\b(allsvenskan|superettan|elitettan|obos damallsvenskan|damallsvenskan)\b/i
