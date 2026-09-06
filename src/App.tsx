@@ -45,7 +45,7 @@ import { buildShortlistIcs, downloadIcs } from './ics'
 import { fetchGeocode } from './places'
 import type { Competition, MatchesPayload } from './types'
 import { matchUrl, statusLabel } from './types'
-import { scoreTag, shouldShowScore } from './score'
+import { isInPlay, scoreTag, shouldShowScore } from './score'
 import {
   countByPhase,
   dayKey,
@@ -1481,24 +1481,49 @@ function ScoreBoard({
   now: Date
 }) {
   const phase = matchPhase(game, now)
-  const show = shouldShowScore(game, now)
   const tag = scoreTag(phase, game.status)
-  if (!show) {
+
+  if (shouldShowScore(game, now)) {
     return (
-      <div className="score score-pending" aria-label="Ej spelad">
-        <span className="vs">vs</span>
+      <div
+        className={`score score-${tag === 'FT' ? 'ft' : 'other'}`}
+        aria-label={`Slutresultat ${game.score.home}–${game.score.away}`}
+      >
+        <span className="score-num">{game.score.home}</span>
+        <span className="sep">–</span>
+        <span className="score-num">{game.score.away}</span>
+        {tag && <span className="score-tag">{tag}</span>}
       </div>
     )
   }
+
+  if (isInPlay(game, now)) {
+    return (
+      <div className="score score-live score-inplay" aria-label="Match pågår">
+        <span className={`score-tag live`}>{tag === 'HT' ? 'HT' : 'LIVE'}</span>
+      </div>
+    )
+  }
+
+  if (game.status === 0) {
+    return (
+      <div className="score score-pending" aria-label="Inställd">
+        <span className="score-tag">INSTÄLLD</span>
+      </div>
+    )
+  }
+
+  if (game.status === 4) {
+    return (
+      <div className="score score-pending" aria-label="Uppskjuten">
+        <span className="score-tag">UPPSKJUTEN</span>
+      </div>
+    )
+  }
+
   return (
-    <div
-      className={`score score-${tag === 'LIVE' ? 'live' : tag === 'HT' ? 'ht' : tag === 'FT' ? 'ft' : 'other'}`}
-      aria-label={`Resultat ${game.score.home}–${game.score.away}`}
-    >
-      <span className="score-num">{game.score.home}</span>
-      <span className="sep">–</span>
-      <span className="score-num">{game.score.away}</span>
-      {tag && <span className={`score-tag ${tag === 'LIVE' ? 'live' : ''}`}>{tag}</span>}
+    <div className="score score-pending" aria-label="Ej spelad">
+      <span className="vs">vs</span>
     </div>
   )
 }

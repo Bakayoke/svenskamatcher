@@ -607,9 +607,15 @@
   margin-top: -0.15rem;
 }
 
-.score-tag.live {
-  color: #c62828;
-  animation: pulse-live 1.4s ease-in-out infinite;
+.score-inplay {
+  min-width: 3.5rem;
+  justify-content: center;
+}
+
+.score-inplay .score-tag {
+  flex-basis: auto;
+  margin: 0;
+  font-size: 0.85rem;
 }
 
 @keyframes pulse-live {
