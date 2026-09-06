@@ -50,7 +50,7 @@ export function statusLabel(status: number): string {
     case 0:
       return 'Inställd'
     case 1:
-      return 'Avslutad'
+      return 'Slut'
     case 2:
       return 'Pågår'
     case 3:

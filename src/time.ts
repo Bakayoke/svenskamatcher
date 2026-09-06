@@ -89,7 +89,7 @@ export function dayKey(dateStr: string): string {
   return dateStr.slice(0, 10)
 }
 
-export type FocusMode = 'overview' | 'live' | 'soon' | 'all'
+export type FocusMode = 'overview' | 'live' | 'soon' | 'results' | 'all'
 
 export function filterByFocus(games: FlatGame[], focus: FocusMode, now = new Date()): FlatGame[] {
   if (focus === 'all') return games
@@ -97,6 +97,7 @@ export function filterByFocus(games: FlatGame[], focus: FocusMode, now = new Dat
     const phase = matchPhase(g, now)
     if (focus === 'live') return phase === 'live'
     if (focus === 'soon') return phase === 'live' || phase === 'soon'
+    if (focus === 'results') return phase === 'done' && g.status === 1
     // overview: hide finished youth noise less — show live, soon, later (not done)
     return phase === 'live' || phase === 'soon' || phase === 'later'
   })
@@ -117,6 +118,13 @@ export function sortForOverview(games: FlatGame[], now = new Date()): FlatGame[]
     if (ra !== rb) return ra - rb
     return parseKickoff(a.date).getTime() - parseKickoff(b.date).getTime()
   })
+}
+
+/** Finished matches: newest kickoff first. */
+export function sortForResults(games: FlatGame[]): FlatGame[] {
+  return [...games].sort(
+    (a, b) => parseKickoff(b.date).getTime() - parseKickoff(a.date).getTime(),
+  )
 }
 
 export function countByPhase(games: FlatGame[], now = new Date()) {

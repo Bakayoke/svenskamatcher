@@ -45,6 +45,7 @@ import { buildShortlistIcs, downloadIcs } from './ics'
 import { fetchGeocode } from './places'
 import type { Competition, MatchesPayload } from './types'
 import { matchUrl, statusLabel } from './types'
+import { scoreTag, shouldShowScore } from './score'
 import {
   countByPhase,
   dayKey,
@@ -56,6 +57,7 @@ import {
   phaseLabel,
   relativeKickoff,
   sortForOverview,
+  sortForResults,
   type FocusMode,
 } from './time'
 import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlState'
@@ -337,8 +339,9 @@ export default function App() {
 
   const timeline = useMemo(() => {
     if (sortByDistance && basePlace) return sortGamesByDistance(focused, venueMeta)
+    if (focus === 'results') return sortForResults(focused)
     return sortForOverview(focused, now)
-  }, [focused, now, sortByDistance, basePlace, venueMeta])
+  }, [focused, now, sortByDistance, basePlace, venueMeta, focus])
 
   const phases = useMemo(() => countByPhase(scouted, now), [scouted, now])
 
@@ -636,6 +639,7 @@ export default function App() {
               ['overview', 'Kommande', phases.live + phases.soon + phases.later],
               ['live', 'Pågår', phases.live],
               ['soon', 'Nu & snart', phases.live + phases.soon],
+              ['results', 'Resultat', phases.done],
               ['all', 'Alla tider', scouted.length],
             ] as const
           ).map(([key, label, count]) => (
@@ -973,13 +977,34 @@ export default function App() {
                 ? 'Hämtar matcher…'
                 : error
                   ? 'Kunde inte ladda'
-                  : `${gameCount} matcher${gameCount !== totalGames ? ` av ${totalGames}` : ''}${
-                      phases.live > 0 ? ` · ${phases.live} pågår` : ''
-                    }${phases.soon > 0 ? ` · ${phases.soon} snart` : ''}`}
+                  : focus === 'results'
+                    ? `${gameCount} slutresultat${gameCount !== phases.done ? '' : ''}`
+                    : `${gameCount} matcher${gameCount !== totalGames ? ` av ${totalGames}` : ''}${
+                        phases.live > 0 ? ` · ${phases.live} pågår` : ''
+                      }${phases.soon > 0 ? ` · ${phases.soon} snart` : ''}${
+                        phases.done > 0 && focus === 'all' ? ` · ${phases.done} klara` : ''
+                      }`}
             </p>
           </div>
           {loading && <div className="spinner" aria-hidden />}
         </div>
+
+        {!loading && !error && scouted.length > 0 && (
+          <div className="phase-strip no-print" aria-label="Matchstatus">
+            <button type="button" className={`phase-pill ${focus === 'live' ? 'active' : ''}`} onClick={() => setFocus('live')}>
+              <span className="dot live" /> Pågår <strong>{phases.live}</strong>
+            </button>
+            <button type="button" className={`phase-pill ${focus === 'soon' ? 'active' : ''}`} onClick={() => setFocus('soon')}>
+              <span className="dot soon" /> Snart <strong>{phases.soon}</strong>
+            </button>
+            <button type="button" className={`phase-pill ${focus === 'results' ? 'active' : ''}`} onClick={() => setFocus('results')}>
+              <span className="dot done" /> Resultat <strong>{phases.done}</strong>
+            </button>
+            <button type="button" className={`phase-pill ${focus === 'overview' ? 'active' : ''}`} onClick={() => setFocus('overview')}>
+              Kommande <strong>{phases.live + phases.soon + phases.later}</strong>
+            </button>
+          </div>
+        )}
 
         {error && <p className="error-box">{error}</p>}
 
@@ -1051,6 +1076,9 @@ export default function App() {
                     {multiDay ? `${kickoffDayShort(g.date)} ${kickoffClock(g.date)}` : kickoffClock(g.date)}
                   </strong>{' '}
                   {g.homeTeam.name.trim()} – {g.awayTeam.name.trim()}
+                  {shouldShowScore(g, now)
+                    ? ` (${g.score.home}–${g.score.away}${scoreTag(matchPhase(g, now), g.status) ? ` ${scoreTag(matchPhase(g, now), g.status)}` : ''})`
+                    : ''}
                   <br />
                   <span>
                     {g.location}
@@ -1078,7 +1106,9 @@ export default function App() {
                       : 'Inga matcher för bevakade lag just nu.'
                     : focus === 'live'
                       ? 'Inga matcher pågår just nu.'
-                      : 'Inga matcher matchar filtren.'}
+                      : focus === 'results'
+                        ? 'Inga slutresultat i valt urval ännu.'
+                        : 'Inga matcher matchar filtren.'}
             </p>
             <div className="empty-actions">
               {preset === 'watch' && watchTeams.length === 0 && (
@@ -1310,11 +1340,7 @@ function TimelineGame({
         </p>
         <div className="teams compact">
           <TeamSide team={game.homeTeam} align="end" onSelectTeam={onSelectTeam} />
-          <div className="score" aria-label="Resultat">
-            <span>{game.score.home}</span>
-            <span className="sep">–</span>
-            <span>{game.score.away}</span>
-          </div>
+          <ScoreBoard game={game} now={now} />
           <TeamSide team={game.awayTeam} align="start" onSelectTeam={onSelectTeam} />
         </div>
         <div className="game-foot">
@@ -1322,6 +1348,7 @@ function TimelineGame({
             {game.location}
             {meta?.km != null ? ` · ${formatKm(meta.km)}` : ''}
             {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
+            {game.note?.trim() ? ` · ${game.note.trim()}` : ''}
           </span>
           <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
             Detaljer
@@ -1412,11 +1439,7 @@ function CompetitionBlock({
               </div>
               <div className="teams">
                 <TeamSide team={game.homeTeam} align="end" onSelectTeam={onSelectTeam} />
-                <div className="score" aria-label="Resultat">
-                  <span>{game.score.home}</span>
-                  <span className="sep">–</span>
-                  <span>{game.score.away}</span>
-                </div>
+                <ScoreBoard game={game} now={now} />
                 <TeamSide team={game.awayTeam} align="start" onSelectTeam={onSelectTeam} />
               </div>
               <div className="game-foot">
@@ -1424,6 +1447,7 @@ function CompetitionBlock({
                   {game.location}
                   {meta?.km != null ? ` · ${formatKm(meta.km)}` : ''}
                   {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
+                  {game.note?.trim() ? ` · ${game.note.trim()}` : ''}
                 </span>
                 <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
                   Detaljer
@@ -1445,6 +1469,37 @@ function CompetitionBlock({
         })}
       </ul>
     </article>
+  )
+}
+
+
+function ScoreBoard({
+  game,
+  now,
+}: {
+  game: Pick<FlatGame, 'status' | 'score' | 'date'>
+  now: Date
+}) {
+  const phase = matchPhase(game, now)
+  const show = shouldShowScore(game, now)
+  const tag = scoreTag(phase, game.status)
+  if (!show) {
+    return (
+      <div className="score score-pending" aria-label="Ej spelad">
+        <span className="vs">vs</span>
+      </div>
+    )
+  }
+  return (
+    <div
+      className={`score score-${tag === 'LIVE' ? 'live' : tag === 'HT' ? 'ht' : tag === 'FT' ? 'ft' : 'other'}`}
+      aria-label={`Resultat ${game.score.home}–${game.score.away}`}
+    >
+      <span className="score-num">{game.score.home}</span>
+      <span className="sep">–</span>
+      <span className="score-num">{game.score.away}</span>
+      {tag && <span className={`score-tag ${tag === 'LIVE' ? 'live' : ''}`}>{tag}</span>}
+    </div>
   )
 }
 
