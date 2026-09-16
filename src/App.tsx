@@ -6,7 +6,9 @@ import { sv as dayPickerSv } from 'react-day-picker/locale'
 import 'react-day-picker/style.css'
 import {
   addSavedView,
+  completeOnboarding,
   dismissTomorrowBanner,
+  isOnboardingDone,
   isTomorrowBannerDismissed,
   loadBasePlace,
   loadLastSession,
@@ -61,6 +63,8 @@ import {
   type FocusMode,
 } from './time'
 import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlState'
+import { DEFAULT_DESC, useDocumentMeta } from './useDocumentMeta'
+import { useInstallPrompt } from './useInstallPrompt'
 import { formatKm, sortGamesByDistance, useVenueEnrichment } from './useVenueEnrichment'
 import './App.css'
 
@@ -158,6 +162,10 @@ export default function App() {
   const [importNotice, setImportNotice] = useState<string | null>(null)
   const [tomorrowWatchCount, setTomorrowWatchCount] = useState<number | null>(null)
   const [showTomorrowBanner, setShowTomorrowBanner] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => !isOnboardingDone() && loadWatchTeams().length < 2,
+  )
+  const install = useInstallPrompt()
 
   useEffect(() => {
     if (!boot.sharedLista) return
@@ -545,6 +553,31 @@ export default function App() {
           .filter((c) => c.games.length > 0)
       : []
 
+  const metaTitle = useMemo(() => {
+    const day =
+      mode === 'single' || isSameDay(from, to)
+        ? format(from, 'd MMM yyyy', { locale: sv })
+        : `${format(from, 'd MMM', { locale: sv })}–${format(to, 'd MMM', { locale: sv })}`
+    if (preset === 'watch' && watchTeams.length > 0) {
+      return `Mina lag · ${day} | Svenska Matcher`
+    }
+    if (focus === 'results') return `Resultat · ${day} | Svenska Matcher`
+    if (focus === 'live') return `Pågående matcher · ${day} | Svenska Matcher`
+    return `Svenska fotbollsmatcher · ${day} | Svenska Matcher`
+  }, [mode, from, to, preset, watchTeams.length, focus])
+
+  useDocumentMeta({
+    title: metaTitle,
+    description: DEFAULT_DESC,
+  })
+
+  useEffect(() => {
+    if (watchTeams.length >= 2 && showOnboarding) {
+      completeOnboarding()
+      setShowOnboarding(false)
+    }
+  }, [watchTeams.length, showOnboarding])
+
   return (
     <div className="page app-shell">
       <header className="hero">
@@ -584,6 +617,57 @@ export default function App() {
           <button type="button" className="chip" onClick={() => setImportNotice(null)}>
             Stäng
           </button>
+        </div>
+      )}
+
+      {showOnboarding && (
+        <div className="return-banner panel onboarding-banner no-print" role="status">
+          <div>
+            <p className="banner-kicker">Kom igång</p>
+            <p>
+              Bevaka <strong>2 lag</strong> med ★ Hem / ★ Borta — nästa gång startar du på Mina lag
+              och får tips om matcher imorgon.
+            </p>
+            <p className="hint inline-hint">
+              Steg {Math.min(watchTeams.length, 2)}/2
+              {watchTeams.length > 0 ? ` · ${watchTeams.slice(0, 2).join(', ')}` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              completeOnboarding()
+              setShowOnboarding(false)
+            }}
+          >
+            Senare
+          </button>
+        </div>
+      )}
+
+      {install.visible && (
+        <div className="return-banner panel install-banner no-print" role="status">
+          <div>
+            <p className="banner-kicker">Snabbare återbesök</p>
+            <p>
+              {install.canPrompt
+                ? 'Lägg till Svenska Matcher på hemskärmen — öppna som en app på matchdagen.'
+                : install.isIos
+                  ? 'På iPhone: dela-knappen → “Lägg till på hemskärmen”.'
+                  : 'Lägg till på hemskärmen via webbläsarens meny för snabbare öppning.'}
+            </p>
+          </div>
+          <div className="return-actions">
+            {install.canPrompt && (
+              <button type="button" className="chip active" onClick={() => void install.install()}>
+                Lägg till på hemskärmen
+              </button>
+            )}
+            <button type="button" className="chip" onClick={install.dismiss}>
+              Inte nu
+            </button>
+          </div>
         </div>
       )}
 
@@ -1207,11 +1291,14 @@ export default function App() {
       </section>
 
       <footer className="footer">
+        <h2 className="footer-title">Svenska fotbollsmatcher för scouting</h2>
         <p>
-          Byggd för scouting av matcher och lag. Spelarlistor/linups saknas i öppen data från
-          svenskfotboll.se — anteckningar och bevakning sparas lokalt i din webbläsare. Kontakta{' '}
-          <a href="mailto:api-support@svenskfotboll.se">api-support@svenskfotboll.se</a> för
-          licensierad tillgång.
+          Svenska Matcher hjälper dig att hitta matcher att scouta i Sverige — herr, dam och ungdom.
+          Filtrera på datum, distrikt och liga, bevaka lag och bygg en delbar scoutlista med anteckningar.
+        </p>
+        <p>
+          Spelarlistor och laguppställningar saknas i öppen data från svenskfotboll.se. Anteckningar och
+          bevakning sparas lokalt i din webbläsare.
         </p>
       </footer>
     </div>

@@ -3,6 +3,7 @@
   "short_name": "Matcher",
   "description": "Scouta svenska fotbollsmatcher – bevaka lag, bygg scoutlista och planera dagen.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#002b4a",
   "theme_color": "#005293",
@@ -12,6 +13,12 @@
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/og.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any"
     }
   ]

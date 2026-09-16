@@ -8,6 +8,7 @@ const VENUE_GEO_KEY = 'sm.venueGeo'
 const VIEWS_KEY = 'sm.savedViews'
 const SESSION_KEY = 'sm.lastSession'
 const DISMISS_TOMORROW_KEY = 'sm.dismissTomorrow'
+const ONBOARDING_KEY = 'sm.onboardingDone'
 
 export type BasePlace = {
   query: string
@@ -191,6 +192,14 @@ export function isTomorrowBannerDismissed(dayIso: string): boolean {
 
 export function dismissTomorrowBanner(dayIso: string) {
   localStorage.setItem(DISMISS_TOMORROW_KEY, dayIso)
+}
+
+export function isOnboardingDone(): boolean {
+  return localStorage.getItem(ONBOARDING_KEY) === '1'
+}
+
+export function completeOnboarding() {
+  localStorage.setItem(ONBOARDING_KEY, '1')
 }
 
 const ELIT_RE =

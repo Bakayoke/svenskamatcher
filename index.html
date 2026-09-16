@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="canonical" href="https://svenskamatcher.com/" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#005293" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -11,18 +12,61 @@
     <meta name="apple-mobile-web-app-title" content="Svenska Matcher" />
     <meta
       name="description"
-      content="Scouta svenska fotbollsmatcher – bevaka lag, bygg scoutlista och planera dagen."
+      content="Scouta svenska fotbollsmatcher per datum – bevaka lag, bygg scoutlista och planera dagen. Herr, dam och ungdom över hela Sverige."
     />
+    <meta name="keywords" content="svenska matcher, fotboll, scouting, allsvenskan, ungdomsfotboll, matchprogram, agent" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="sv_SE" />
+    <meta property="og:site_name" content="Svenska Matcher" />
+    <meta property="og:url" content="https://svenskamatcher.com/" />
+    <meta property="og:title" content="Svenska Matcher – scouta fotbollsmatcher i Sverige" />
+    <meta
+      property="og:description"
+      content="Hitta matcher att scouta, bevaka lag och bygg en resa. Tidslinje, scoutlista och delbara vyer."
+    />
+    <meta property="og:image" content="https://svenskamatcher.com/og.png" />
+    <meta property="og:image:width" content="1536" />
+    <meta property="og:image:height" content="1024" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Svenska Matcher – scouta fotbollsmatcher i Sverige" />
+    <meta
+      name="twitter:description"
+      content="Hitta matcher att scouta, bevaka lag och bygg en resa."
+    />
+    <meta name="twitter:image" content="https://svenskamatcher.com/og.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Source+Sans+3:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <title>Svenska Matcher</title>
+    <title>Svenska Matcher – scouta fotbollsmatcher i Sverige</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Svenska Matcher",
+        "url": "https://svenskamatcher.com/",
+        "description": "Scouta svenska fotbollsmatcher per datum – bevaka lag, bygg scoutlista och planera dagen.",
+        "applicationCategory": "SportsApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "sv-SE",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "SEK" }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <main>
+        <h1>Svenska Matcher</h1>
+        <p>
+          Webbapp för att scouta svenska fotbollsmatcher per datum eller intervall. Filtrera på herr,
+          dam och ungdom, bevaka lag, bygg en scoutlista och planera dagen.
+        </p>
+        <p>Aktivera JavaScript för att använda appen på svenskamatcher.com.</p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
