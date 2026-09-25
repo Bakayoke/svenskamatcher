@@ -1,8 +1,10 @@
 import { getMatches } from '../server/matches'
 import { geocodePlace, weatherAt } from '../server/places'
+import { buildSitemapXml, injectSeoHtml } from '../server/seo'
 
 export interface Env {
   ASSETS: Fetcher
+  GOOGLE_SITE_VERIFICATION?: string
 }
 
 function json(data: unknown, init: ResponseInit = {}) {
@@ -11,9 +13,43 @@ function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers })
 }
 
+async function seoPage(request: Request, env: Env, pathname: string) {
+  const assetRes = await env.ASSETS.fetch(new URL('/index.html', request.url))
+  let html = await assetRes.text()
+  html = await injectSeoHtml(html, pathname)
+  if (env.GOOGLE_SITE_VERIFICATION?.trim()) {
+    const token = env.GOOGLE_SITE_VERIFICATION.trim()
+    html = html.replace(
+      '</head>',
+      `<meta name="google-site-verification" content="${token}" />\n  </head>`,
+    )
+  }
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=120',
+    },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+
+    if (url.pathname === '/sitemap.xml') {
+      try {
+        const xml = await buildSitemapXml()
+        return new Response(xml, {
+          headers: {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Sitemap error'
+        return new Response(message, { status: 502 })
+      }
+    }
 
     if (url.pathname === '/api/health') {
       return json({ ok: true })
@@ -79,6 +115,35 @@ export default {
 
     if (url.pathname.startsWith('/api/')) {
       return json({ error: 'Not found' }, { status: 404 })
+    }
+
+    const path = url.pathname.replace(/\/+$/, '') || '/'
+    if (
+      path === '/idag' ||
+      path === '/imorgon' ||
+      path.startsWith('/lag/') ||
+      path.startsWith('/distrikt/') ||
+      path.startsWith('/matcher/')
+    ) {
+      try {
+        return await seoPage(request, env, path)
+      } catch {
+        // fall through to SPA
+      }
+    }
+
+    // Home: optional verification meta
+    if ((path === '/' || path === '') && env.GOOGLE_SITE_VERIFICATION?.trim()) {
+      const assetRes = await env.ASSETS.fetch(new URL('/index.html', request.url))
+      let html = await assetRes.text()
+      const token = env.GOOGLE_SITE_VERIFICATION.trim()
+      html = html.replace(
+        '</head>',
+        `<meta name="google-site-verification" content="${token}" />\n  </head>`,
+      )
+      return new Response(html, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
     }
 
     return env.ASSETS.fetch(request)

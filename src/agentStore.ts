@@ -9,6 +9,8 @@ const VIEWS_KEY = 'sm.savedViews'
 const SESSION_KEY = 'sm.lastSession'
 const DISMISS_TOMORROW_KEY = 'sm.dismissTomorrow'
 const ONBOARDING_KEY = 'sm.onboardingDone'
+const PARENT_KEY = 'sm.parentMode'
+const LAST_SCOUTED_KEY = 'sm.lastScouted'
 
 export type BasePlace = {
   query: string
@@ -200,6 +202,37 @@ export function isOnboardingDone(): boolean {
 
 export function completeOnboarding() {
   localStorage.setItem(ONBOARDING_KEY, '1')
+}
+
+export function loadParentMode(): boolean {
+  return localStorage.getItem(PARENT_KEY) === '1'
+}
+
+export function saveParentMode(on: boolean) {
+  localStorage.setItem(PARENT_KEY, on ? '1' : '0')
+}
+
+export type LastScouted = {
+  gameId: number
+  label: string
+  date: string
+  at: string
+}
+
+export function loadLastScouted(): LastScouted[] {
+  return readJson<LastScouted[]>(LAST_SCOUTED_KEY, [])
+}
+
+export function pushLastScouted(
+  entry: Omit<LastScouted, 'at'>,
+  current: LastScouted[],
+): LastScouted[] {
+  const next = [
+    { ...entry, at: new Date().toISOString() },
+    ...current.filter((x) => x.gameId !== entry.gameId),
+  ].slice(0, 12)
+  writeJson(LAST_SCOUTED_KEY, next)
+  return next
 }
 
 const ELIT_RE =

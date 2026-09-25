@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { getMatches } from './server/matches.ts'
 import { geocodePlace, weatherAt } from './server/places.ts'
+import { buildSitemapXml } from './server/seo.ts'
 
 function sendJson(res: import('http').ServerResponse, status: number, data: unknown) {
   res.statusCode = status
@@ -14,8 +15,37 @@ function matchesApiPlugin(): Plugin {
     name: 'svenska-matcher-api',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        if (!req.url?.startsWith('/api/')) return next()
-        const url = new URL(req.url, 'http://localhost')
+        const raw = req.url ?? ''
+        const url = new URL(raw, 'http://localhost')
+
+        if (url.pathname === '/sitemap.xml') {
+          try {
+            const xml = await buildSitemapXml()
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/xml; charset=utf-8')
+            res.end(xml)
+            return
+          } catch (err) {
+            res.statusCode = 502
+            res.end(err instanceof Error ? err.message : 'sitemap error')
+            return
+          }
+        }
+
+        // SPA fallback for SEO client routes in dev
+        if (
+          url.pathname === '/idag' ||
+          url.pathname === '/imorgon' ||
+          url.pathname.startsWith('/lag/') ||
+          url.pathname.startsWith('/distrikt/') ||
+          url.pathname.startsWith('/matcher/')
+        ) {
+          req.url = '/index.html'
+          next()
+          return
+        }
+
+        if (!raw.startsWith('/api/')) return next()
 
         try {
           if (url.pathname === '/api/health') {

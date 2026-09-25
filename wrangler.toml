@@ -4,6 +4,8 @@ main = "worker/index.ts"
 workers_dev = true
 preview_urls = true
 
+# Optional Search Console: npx wrangler secret put GOOGLE_SITE_VERIFICATION
+
 routes = [
   { pattern = "svenskamatcher.com", custom_domain = true },
   { pattern = "www.svenskamatcher.com", custom_domain = true },
@@ -13,4 +15,4 @@ routes = [
 directory = "./dist"
 not_found_handling = "single-page-application"
 binding = "ASSETS"
-run_worker_first = ["/api/*"]
+run_worker_first = ["/api/*", "/sitemap.xml", "/idag", "/imorgon", "/lag/*", "/distrikt/*", "/matcher/*"]

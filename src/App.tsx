@@ -11,20 +11,25 @@ import {
   isOnboardingDone,
   isTomorrowBannerDismissed,
   loadBasePlace,
+  loadLastScouted,
   loadLastSession,
   loadNotes,
+  loadParentMode,
   loadSavedViews,
   loadShortlist,
   loadWatchTeams,
   matchesPreset,
+  pushLastScouted,
   removeSavedView,
   saveBasePlace,
   saveLastSession,
   saveNote,
+  saveParentMode,
   saveShortlist,
   toggleShortlist,
   toggleWatchTeam,
   type BasePlace,
+  type LastScouted,
   type SavedView,
   type ScoutPreset,
   type ShortlistedMatch,
@@ -32,7 +37,7 @@ import {
 import { decodeShortlist, mergeShortlists, shortlistShareUrl } from './shareShortlist'
 import { fetchMatches } from './api'
 import { buildClusters } from './clusters'
-import { districtName } from './districts'
+import { DISTRICT_NAMES, districtName } from './districts'
 import { downloadShortlistCsv, downloadShortlistJson } from './exportScout'
 import {
   countGames,
@@ -63,6 +68,9 @@ import {
   type FocusMode,
 } from './time'
 import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlState'
+import { bootFromPathname, isoDay, navigateSeo } from './pathState'
+import { YOUTH_AGE_CHIPS, teamPath } from './seoRoutes'
+import { buildTravelPlan, travelPlanSummary } from './travelPlan'
 import { DEFAULT_DESC, useDocumentMeta } from './useDocumentMeta'
 import { useInstallPrompt } from './useInstallPrompt'
 import { formatKm, sortGamesByDistance, useVenueEnrichment } from './useVenueEnrichment'
@@ -89,39 +97,62 @@ function initialFromUrl() {
   const u = readUrlState()
   const session = loadLastSession()
   const watched = loadWatchTeams()
+  const pathBoot = bootFromPathname(window.location.pathname)
+  const pathSeo =
+    pathBoot.teamFocus != null ||
+    pathBoot.districtId !== 'all' ||
+    window.location.pathname === '/idag' ||
+    window.location.pathname === '/imorgon' ||
+    window.location.pathname.startsWith('/matcher/')
   const bare =
-    !u.from && !u.to && !u.preset && !u.focus && !u.gender && !u.age && !u.q && !u.district && !u.lista
+    !pathSeo &&
+    !u.from &&
+    !u.to &&
+    !u.preset &&
+    !u.focus &&
+    !u.gender &&
+    !u.age &&
+    !u.q &&
+    !u.district &&
+    !u.lista
   const today = new Date()
-  const from = parseDateParam(
-    u.from ?? (bare ? session?.from : undefined),
-    today,
-  )
-  const to = parseDateParam(
-    u.to ?? (bare ? session?.to : undefined),
-    from,
-  )
+  const from = pathSeo
+    ? pathBoot.from
+    : parseDateParam(u.from ?? (bare ? session?.from : undefined), today)
+  const to = pathSeo
+    ? pathBoot.to
+    : parseDateParam(u.to ?? (bare ? session?.to : undefined), from)
   const singleDay = isSameDay(from, to)
   const defaultPreset: ScoutPreset =
     watched.length > 0 ? 'watch' : ((session?.preset as ScoutPreset | undefined) ?? 'all')
   return {
-    mode: (singleDay ? 'single' : 'range') as Mode,
+    mode: (pathSeo ? pathBoot.mode : singleDay ? 'single' : 'range') as Mode,
     single: from,
     range: { from, to } as DateRange,
-    focus: (u.focus ?? (bare ? (session?.focus as FocusMode | undefined) : undefined) ?? 'overview') as FocusMode,
-    preset: (u.preset ?? (bare ? session?.preset : undefined) ?? defaultPreset) as ScoutPreset,
+    focus: (pathBoot.focus ??
+      u.focus ??
+      (bare ? (session?.focus as FocusMode | undefined) : undefined) ??
+      'overview') as FocusMode,
+    preset: (pathBoot.preset ??
+      u.preset ??
+      (bare ? session?.preset : undefined) ??
+      defaultPreset) as ScoutPreset,
     layout: (u.layout ?? (bare ? session?.layout : undefined) ?? 'timeline') as Layout,
     showShortlistOnly: u.shortlist === '1' || Boolean(u.lista),
+    teamFocus: pathBoot.teamFocus,
     filters: {
       ...emptyFilters(),
       gender: u.gender ?? (bare ? session?.gender : undefined) ?? 'all',
       ageCategory: u.age ?? (bare ? session?.ageCategory : undefined) ?? 'all',
-      query: u.q ?? (bare ? session?.query : undefined) ?? '',
+      query: pathBoot.query ?? u.q ?? (bare ? session?.query : undefined) ?? '',
       districtId:
-        u.district && u.district !== 'all'
-          ? Number(u.district)
-          : bare && session?.districtId != null
-            ? session.districtId
-            : 'all',
+        pathBoot.districtId !== 'all'
+          ? pathBoot.districtId
+          : u.district && u.district !== 'all'
+            ? Number(u.district)
+            : bare && session?.districtId != null
+              ? session.districtId
+              : 'all',
     } as Filters,
     sharedLista: u.lista,
   }
@@ -149,7 +180,7 @@ export default function App() {
   const [notes, setNotes] = useState<Record<string, string>>(() => loadNotes())
   const [noteGameId, setNoteGameId] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
-  const [teamFocus, setTeamFocus] = useState<string | null>(null)
+  const [teamFocus, setTeamFocus] = useState<string | null>(boot.teamFocus)
   const [clusterId, setClusterId] = useState<string | null>(null)
   const [basePlace, setBasePlace] = useState<BasePlace | null>(() => loadBasePlace())
   const [baseDraft, setBaseDraft] = useState(() => loadBasePlace()?.query ?? '')
@@ -166,6 +197,29 @@ export default function App() {
     () => !isOnboardingDone() && loadWatchTeams().length < 2,
   )
   const install = useInstallPrompt()
+  const [parentMode, setParentMode] = useState(() => loadParentMode())
+  const [lastScouted, setLastScouted] = useState<LastScouted[]>(() => loadLastScouted())
+  const [showTravel, setShowTravel] = useState(false)
+  const [youthChip, setYouthChip] = useState<string | null>(null)
+
+  useEffect(() => {
+    document.getElementById('seo-content')?.setAttribute('hidden', '')
+  }, [])
+
+  useEffect(() => {
+    const onPop = () => {
+      const p = bootFromPathname(window.location.pathname)
+      setMode(p.mode)
+      setSingle(p.from)
+      setRange({ from: p.from, to: p.to })
+      setTeamFocus(p.teamFocus)
+      setFilters((f) => ({ ...f, districtId: p.districtId, query: p.query ?? f.query }))
+      if (p.focus) setFocus(p.focus)
+      if (p.preset) setPreset(p.preset)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   useEffect(() => {
     if (!boot.sharedLista) return
@@ -323,11 +377,25 @@ export default function App() {
       games = games.filter(
         (g) =>
           g.homeTeam.name.trim().toLowerCase() === t ||
-          g.awayTeam.name.trim().toLowerCase() === t,
+          g.awayTeam.name.trim().toLowerCase() === t ||
+          g.homeTeam.name.trim().toLowerCase().includes(t) ||
+          g.awayTeam.name.trim().toLowerCase().includes(t),
       )
     }
+    if (youthChip) {
+      const tag = youthChip.toLowerCase()
+      games = games.filter(
+        (g) =>
+          g.competitionName.toLowerCase().includes(tag) ||
+          g.homeTeam.name.toLowerCase().includes(tag) ||
+          g.awayTeam.name.toLowerCase().includes(tag),
+      )
+    }
+    if (parentMode && watchTeams.length > 0 && preset === 'watch') {
+      // already filtered by watch preset
+    }
     return games
-  }, [flat, preset, watchTeams, showShortlistOnly, shortlist, teamFocus])
+  }, [flat, preset, watchTeams, showShortlistOnly, shortlist, teamFocus, youthChip, parentMode])
 
   const clusters = useMemo(() => buildClusters(scouted), [scouted])
 
@@ -365,6 +433,25 @@ export default function App() {
       .sort((a, b) => a.name.localeCompare(b.name, 'sv'))
   }, [data])
 
+  const popularTeams = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const g of flat) {
+      for (const n of [g.homeTeam.name.trim(), g.awayTeam.name.trim()]) {
+        if (!n) continue
+        counts.set(n, (counts.get(n) ?? 0) + 1)
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'sv'))
+      .slice(0, 12)
+      .map(([name]) => name)
+  }, [flat])
+
+  const travelStops = useMemo(() => {
+    if (!showTravel || shortlist.length === 0) return []
+    return buildTravelPlan(shortlist)
+  }, [showTravel, shortlist])
+
   const shortlistConflicts = useMemo(() => {
     const bySlot = new Map<string, ShortlistedMatch[]>()
     for (const m of shortlist) {
@@ -401,21 +488,26 @@ export default function App() {
   }, [timeline, showDayHeaders])
 
   function goToday() {
+    navigateSeo('today')
     const today = new Date()
     setMode('single')
     setSingle(today)
     setRange({ from: today, to: today })
     setFocus('overview')
-    if (watchTeams.length > 0) setPreset('watch')
+    setTeamFocus(null)
+    if (watchTeams.length > 0 && !parentMode) setPreset('watch')
+    if (parentMode && watchTeams.length > 0) setPreset('watch')
     setCalendarOpen(false)
   }
 
   function goTomorrow() {
+    navigateSeo('tomorrow')
     const d = addDays(new Date(), 1)
     setMode('single')
     setSingle(d)
     setRange({ from: d, to: d })
     setFocus('all')
+    setTeamFocus(null)
     if (watchTeams.length > 0) setPreset('watch')
     setCalendarOpen(false)
   }
@@ -694,6 +786,18 @@ export default function App() {
           <button type="button" className="chip" onClick={copyShareLink}>
             {copied ? 'Länk kopierad' : 'Dela vy'}
           </button>
+          <button
+            type="button"
+            className={`chip ${parentMode ? 'active' : ''}`}
+            onClick={() => {
+              const next = !parentMode
+              setParentMode(next)
+              saveParentMode(next)
+              if (next && watchTeams.length > 0) setPreset('watch')
+            }}
+          >
+            Föräldraläge
+          </button>
         </div>
 
         <div className="focus-row" role="group" aria-label="Scoutläge">
@@ -749,6 +853,13 @@ export default function App() {
               <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
                 {listaCopied ? 'Listlänk kopierad' : 'Dela scoutlista'}
               </button>
+              <button
+                type="button"
+                className={`chip ${showTravel ? 'active' : ''}`}
+                onClick={() => setShowTravel((v) => !v)}
+              >
+                Resplan
+              </button>
               <button type="button" className="chip" onClick={exportShortlistIcs}>
                 Exportera .ics
               </button>
@@ -768,7 +879,33 @@ export default function App() {
         {shortlistConflicts.length > 0 && (
           <p className="hint warn">
             Tidskonflikt i scoutlistan: {shortlistConflicts.length} kickoff-tider har flera matcher.
+            {showTravel ? '' : ' Öppna Resplan för översikt.'}
           </p>
+        )}
+
+        {showTravel && shortlist.length > 0 && (
+          <section className="travel-plan panel no-print" aria-label="Resplan">
+            <h3>Resplan</h3>
+            <p className="cluster-lede">{travelPlanSummary(travelStops, basePlace)}</p>
+            <ol className="travel-list">
+              {travelStops.map((stop) => (
+                <li key={stop.match.gameId} className={stop.conflict ? 'conflict' : ''}>
+                  <strong>
+                    {stop.match.date.slice(0, 10)} {stop.match.date.slice(11, 16)}
+                  </strong>{' '}
+                  {stop.match.home} – {stop.match.away}
+                  <br />
+                  <span>
+                    {stop.match.location}
+                    {stop.gapMinutes != null
+                      ? ` · ${stop.gapMinutes >= 0 ? `${stop.gapMinutes} min efter föregående` : 'överlapp'}`
+                      : ''}
+                    {stop.conflict ? ' · tidskonflikt' : ''}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
         )}
 
         <div className="layout-row">
@@ -811,6 +948,21 @@ export default function App() {
             onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
           />
         </label>
+
+        {!parentMode && (
+          <div className="chip-row tight" role="group" aria-label="Åldersnivå i liganamn">
+            {YOUTH_AGE_CHIPS.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className={`chip ${youthChip === tag ? 'active' : ''}`}
+                onClick={() => setYouthChip((c) => (c === tag ? null : tag))}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
 
         <details className="more-filters">
           <summary>Fler filter & distrikt</summary>
@@ -1090,6 +1242,91 @@ export default function App() {
           </div>
         )}
 
+        {!parentMode && lastScouted.length > 0 && (
+          <section className="discover panel no-print" aria-label="Senast scoutat">
+            <h3>Senast scoutat</h3>
+            <ul className="discover-links">
+              {lastScouted.slice(0, 6).map((s) => (
+                <li key={`${s.gameId}-${s.at}`}>
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => {
+                      const name = s.label.split('–')[0]?.trim()
+                      if (name) {
+                        setTeamFocus(name)
+                        navigateSeo('team', { team: name })
+                      }
+                    }}
+                  >
+                    {s.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <section className="discover panel no-print" aria-label="Upptäck">
+          <h3>Upptäck</h3>
+          <p className="cluster-lede">Sidor Google kan indexera — lag, distrikt och datum.</p>
+          <div className="discover-grid">
+            <div>
+              <h4>Snabblänkar</h4>
+              <ul className="discover-links">
+                <li><a href="/idag" onClick={(e) => { e.preventDefault(); goToday() }}>Matcher idag</a></li>
+                <li><a href="/imorgon" onClick={(e) => { e.preventDefault(); goTomorrow() }}>Matcher imorgon</a></li>
+                <li><a href={`/matcher/${isoDay(now)}`}>Dagens URL</a></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Populära lag</h4>
+              <ul className="discover-links">
+                {popularTeams.map((name) => (
+                  <li key={name}>
+                    <a
+                      href={teamPath(name)}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setTeamFocus(name)
+                        setPreset('all')
+                        setShowShortlistOnly(false)
+                        navigateSeo('team', { team: name })
+                      }}
+                    >
+                      {name}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <h4>Distrikt</h4>
+              <ul className="discover-links">
+                {Object.entries(DISTRICT_NAMES)
+                  .filter(([id]) => Number(id) > 1)
+                  .slice(0, 10)
+                  .map(([id, name]) => (
+                    <li key={id}>
+                      <a
+                        href={`/distrikt/${id}`}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          const distId = Number(id)
+                          setFilters((f) => ({ ...f, districtId: distId }))
+                          setTeamFocus(null)
+                          navigateSeo('district', { districtId: distId })
+                        }}
+                      >
+                        {name}
+                      </a>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+
         {error && <p className="error-box">{error}</p>}
 
         {(teamFocus || clusterId) && (
@@ -1248,9 +1485,33 @@ export default function App() {
                       onSelectTeam={(name) => {
                         setClusterId(null)
                         setTeamFocus(name)
+                        setLastScouted(
+                          pushLastScouted(
+                            {
+                              gameId: 0,
+                              label: name,
+                              date: fromIso,
+                            },
+                            lastScouted,
+                          ),
+                        )
+                        navigateSeo('team', { team: name })
                       }}
                       onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
-                      onToggleShortlist={() => setShortlist(toggleShortlist(game, shortlist))}
+                      onToggleShortlist={() => {
+                        const next = toggleShortlist(game, shortlist)
+                        setShortlist(next)
+                        setLastScouted(
+                          pushLastScouted(
+                            {
+                              gameId: game.gameId,
+                              label: `${game.homeTeam.name.trim()} – ${game.awayTeam.name.trim()}`,
+                              date: game.date,
+                            },
+                            lastScouted,
+                          ),
+                        )
+                      }}
                       onToggleNote={() =>
                         setNoteGameId((id) => (id === game.gameId ? null : game.gameId))
                       }
@@ -1278,6 +1539,7 @@ export default function App() {
                 onSelectTeam={(name) => {
                   setClusterId(null)
                   setTeamFocus(name)
+                  navigateSeo('team', { team: name })
                 }}
                 onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
                 onToggleShortlist={(game) => setShortlist(toggleShortlist(game, shortlist))}
