@@ -70,6 +70,14 @@ import {
 import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlState'
 import { bootFromPathname, isoDay, navigateSeo } from './pathState'
 import { YOUTH_AGE_CHIPS, teamPath } from './seoRoutes'
+import {
+  clockFromMs,
+  DEFAULT_DAY_ROUTE,
+  formatDrive,
+  optimizeDayRoute,
+  type DayRouteOptions,
+} from './dayOptimizer'
+import { mapsDrivingUrl, mapsPlaceUrl } from './maps'
 import { buildTravelPlan, travelPlanSummary } from './travelPlan'
 import { DEFAULT_DESC, useDocumentMeta } from './useDocumentMeta'
 import { useInstallPrompt } from './useInstallPrompt'
@@ -200,6 +208,8 @@ export default function App() {
   const [parentMode, setParentMode] = useState(() => loadParentMode())
   const [lastScouted, setLastScouted] = useState<LastScouted[]>(() => loadLastScouted())
   const [showTravel, setShowTravel] = useState(false)
+  const [showDayRoute, setShowDayRoute] = useState(false)
+  const [watchMinutes, setWatchMinutes] = useState(60)
   const [youthChip, setYouthChip] = useState<string | null>(null)
 
   useEffect(() => {
@@ -411,7 +421,15 @@ export default function App() {
     return games
   }, [scouted, focus, now, clusterId, clusters])
 
-  const venueMeta = useVenueEnrichment(focused, basePlace)
+  const shortlistLocations = useMemo(
+    () => shortlist.map((s) => s.location).filter(Boolean),
+    [shortlist],
+  )
+  const { metaByGameId: venueMeta, geoCache } = useVenueEnrichment(
+    focused,
+    basePlace,
+    shortlistLocations,
+  )
 
   const timeline = useMemo(() => {
     if (sortByDistance && basePlace) return sortGamesByDistance(focused, venueMeta)
@@ -449,8 +467,44 @@ export default function App() {
 
   const travelStops = useMemo(() => {
     if (!showTravel || shortlist.length === 0) return []
-    return buildTravelPlan(shortlist)
-  }, [showTravel, shortlist])
+    return buildTravelPlan(shortlist, geoCache)
+  }, [showTravel, shortlist, geoCache])
+
+  const travelMapsUrl = useMemo(() => {
+    if (!showTravel || travelStops.length === 0) return null
+    const points = travelStops
+      .filter((s) => s.lat != null && s.lon != null)
+      .map((s) => ({ lat: s.lat!, lon: s.lon! }))
+    if (points.length === 0) return null
+    const origin = basePlace ?? points[0]!
+    const rest = basePlace ? points : points.slice(1)
+    if (rest.length === 0) return mapsPlaceUrl(origin)
+    return mapsDrivingUrl(origin, rest)
+  }, [showTravel, travelStops, basePlace])
+
+  const dayRouteOpts = useMemo<DayRouteOptions>(
+    () => ({ ...DEFAULT_DAY_ROUTE, watchMinutes }),
+    [watchMinutes],
+  )
+
+  const dayRoute = useMemo(() => {
+    if (!showDayRoute) return null
+    const coords = new Map<number, { lat: number; lon: number }>()
+    for (const g of focused) {
+      const m = venueMeta.get(g.gameId)
+      if (m) coords.set(g.gameId, { lat: m.lat, lon: m.lon })
+    }
+    return optimizeDayRoute(focused, coords, basePlace, dayRouteOpts)
+  }, [showDayRoute, focused, venueMeta, basePlace, dayRouteOpts])
+
+  const dayRouteMapsUrl = useMemo(() => {
+    if (!dayRoute || dayRoute.stops.length === 0) return null
+    const points = dayRoute.stops.map((s) => ({ lat: s.lat, lon: s.lon }))
+    const origin = basePlace ?? points[0]!
+    const rest = basePlace ? points : points.slice(1)
+    if (rest.length === 0) return mapsPlaceUrl(origin)
+    return mapsDrivingUrl(origin, rest)
+  }, [dayRoute, basePlace])
 
   const shortlistConflicts = useMemo(() => {
     const bySlot = new Map<string, ShortlistedMatch[]>()
@@ -462,6 +516,18 @@ export default function App() {
     }
     return [...bySlot.values()].filter((list) => list.length > 1)
   }, [shortlist])
+
+  function applyDayRouteToShortlist() {
+    if (!dayRoute || dayRoute.stops.length === 0) return
+    let next = shortlist.slice()
+    for (const stop of dayRoute.stops) {
+      if (next.some((s) => s.gameId === stop.game.gameId)) continue
+      next = toggleShortlist(stop.game, next)
+    }
+    setShortlist(next)
+    setShowShortlistOnly(true)
+    setShowTravel(true)
+  }
 
   const gameCount = focused.length
   const totalGames = countGames(data?.competitions ?? [])
@@ -848,6 +914,14 @@ export default function App() {
           >
             Scoutlista ({shortlist.length})
           </button>
+          <button
+            type="button"
+            className={`chip ${showDayRoute ? 'active' : ''}`}
+            onClick={() => setShowDayRoute((v) => !v)}
+            title="Hitta vilka matcher du hinner se samma dag"
+          >
+            Hinner jag?
+          </button>
           {shortlist.length > 0 && (
             <>
               <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
@@ -883,10 +957,103 @@ export default function App() {
           </p>
         )}
 
+        {showDayRoute && (
+          <section className="travel-plan day-route panel no-print" aria-label="Dagsrutt">
+            <h3>Hinner jag?</h3>
+            <p className="cluster-lede">
+              Optimal rutt bland synliga matcher
+              {basePlace ? ` från ${basePlace.query}` : ' (sätt basort för bättre start)'}
+              . Uppskattad bilväg · {watchMinutes} min på plats per match.
+            </p>
+            <div className="chip-row tight" role="group" aria-label="Tid på plats">
+              {[45, 60, 90].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`chip ${watchMinutes === m ? 'active' : ''}`}
+                  onClick={() => setWatchMinutes(m)}
+                >
+                  {m} min
+                </button>
+              ))}
+            </div>
+            {!basePlace && (
+              <p className="hint">Tips: ange basort under filter så räknas första sträckan in.</p>
+            )}
+            {dayRoute && dayRoute.stops.length === 0 && (
+              <p className="hint warn">
+                Ingen genomförbar rutt än.
+                {dayRoute.unmapped > 0
+                  ? ` ${dayRoute.unmapped} matcher saknar plats på kartan (vänta på geokodning eller begränsa urvalet).`
+                  : ' Prova färre filter, kortare tid på plats, eller en närmare basort.'}
+              </p>
+            )}
+            {dayRoute && dayRoute.stops.length > 0 && (
+              <>
+                <p className="cluster-lede">
+                  {dayRoute.stops.length} matcher · {formatKm(dayRoute.totalKm)} ·{' '}
+                  {formatDrive(dayRoute.totalDriveMinutes)}
+                  {dayRoute.skipped > 0 ? ` · ${dayRoute.skipped} hoppades över` : ''}
+                  {dayRoute.unmapped > 0 ? ` · ${dayRoute.unmapped} utan karta` : ''}
+                </p>
+                <ol className="travel-list">
+                  {dayRoute.stops.map((stop, i) => (
+                    <li key={stop.game.gameId}>
+                      <strong>
+                        {kickoffClock(stop.game.date)}
+                        {i > 0
+                          ? ` · ankomst ca ${clockFromMs(stop.arriveAt)}`
+                          : ` · åk senast ${clockFromMs(stop.departAt)}`}
+                      </strong>{' '}
+                      {stop.game.homeTeam.name.trim()} – {stop.game.awayTeam.name.trim()}
+                      <br />
+                      <span>
+                        {stop.game.location}
+                        {stop.driveMinutesFromPrev > 0
+                          ? ` · ${formatKm(stop.kmFromPrev)} · ${formatDrive(stop.driveMinutesFromPrev)}`
+                          : i === 0 && basePlace
+                            ? ` · ${formatKm(stop.kmFromPrev)} från bas`
+                            : ''}
+                        {stop.slackMinutes > 0 ? ` · ${stop.slackMinutes} min marginal` : ''}
+                      </span>
+                      <br />
+                      <a
+                        className="maps-link"
+                        href={mapsPlaceUrl({ lat: stop.lat, lon: stop.lon })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Visa i Maps
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+                <div className="return-actions">
+                  {dayRouteMapsUrl && (
+                    <a className="chip active maps-chip" href={dayRouteMapsUrl} target="_blank" rel="noreferrer">
+                      Navigera hela rutten
+                    </a>
+                  )}
+                  <button type="button" className="chip" onClick={applyDayRouteToShortlist}>
+                    Lägg rutten i scoutlista
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
         {showTravel && shortlist.length > 0 && (
           <section className="travel-plan panel no-print" aria-label="Resplan">
             <h3>Resplan</h3>
             <p className="cluster-lede">{travelPlanSummary(travelStops, basePlace)}</p>
+            {travelMapsUrl && (
+              <div className="return-actions" style={{ marginBottom: '0.55rem' }}>
+                <a className="chip active maps-chip" href={travelMapsUrl} target="_blank" rel="noreferrer">
+                  Öppna i Google Maps
+                </a>
+              </div>
+            )}
             <ol className="travel-list">
               {travelStops.map((stop) => (
                 <li key={stop.match.gameId} className={stop.conflict ? 'conflict' : ''}>
@@ -897,11 +1064,27 @@ export default function App() {
                   <br />
                   <span>
                     {stop.match.location}
+                    {stop.driveMinutes != null
+                      ? ` · ${formatKm(stop.kmFromPrev)} · ${formatDrive(stop.driveMinutes)}`
+                      : ''}
                     {stop.gapMinutes != null
                       ? ` · ${stop.gapMinutes >= 0 ? `${stop.gapMinutes} min efter föregående` : 'överlapp'}`
                       : ''}
                     {stop.conflict ? ' · tidskonflikt' : ''}
                   </span>
+                  {stop.lat != null && stop.lon != null && (
+                    <>
+                      <br />
+                      <a
+                        className="maps-link"
+                        href={mapsPlaceUrl({ lat: stop.lat, lon: stop.lon })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Navigera hit
+                      </a>
+                    </>
+                  )}
                 </li>
               ))}
             </ol>
@@ -1094,7 +1277,7 @@ export default function App() {
 
           <div className="base-place">
             <label className="field">
-              <span>Basort (för avstånd)</span>
+              <span>Basort (avstånd & dagsrutt)</span>
               <div className="base-row">
                 <input
                   type="text"
@@ -1556,11 +1739,12 @@ export default function App() {
         <h2 className="footer-title">Svenska fotbollsmatcher för scouting</h2>
         <p>
           Svenska Matcher hjälper dig att hitta matcher att scouta i Sverige — herr, dam och ungdom.
-          Filtrera på datum, distrikt och liga, bevaka lag och bygg en delbar scoutlista med anteckningar.
+          Filtrera på datum, distrikt och liga, planera vilka matcher du hinner se och navigera dit via
+          Google Maps.
         </p>
         <p>
-          Spelarlistor och laguppställningar saknas i öppen data från svenskfotboll.se. Anteckningar och
-          bevakning sparas lokalt i din webbläsare.
+          Spelarlistor och laguppställningar saknas i öppen data från svenskfotboll.se. Anteckningar,
+          bevakning och scoutlista sparas lokalt i din webbläsare (fungerar även som installerad app).
         </p>
       </footer>
     </div>
@@ -1654,7 +1838,12 @@ function TimelineGame({
   game: FlatGame
   now: Date
   showDate?: boolean
-  meta?: { km: number | null; weather: { summary: string } | null } | null
+  meta?: {
+    lat?: number
+    lon?: number
+    km: number | null
+    weather: { summary: string } | null
+  } | null
   watched: Set<string>
   shortlisted: boolean
   note: string
@@ -1668,6 +1857,12 @@ function TimelineGame({
 }) {
   const phase = matchPhase(game, now)
   const homeDistrict = districtName(game.homeTeamClubAssociationId)
+  const mapsHref =
+    meta?.lat != null && meta?.lon != null
+      ? mapsPlaceUrl({ lat: meta.lat, lon: meta.lon })
+      : game.location?.trim()
+        ? mapsPlaceUrl(game.location.trim())
+        : null
   return (
     <li className={`timeline-game phase-${phase} ${shortlisted ? 'shortlisted' : ''}`} style={style}>
       <div className="tl-time">
@@ -1699,9 +1894,16 @@ function TimelineGame({
             {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
             {game.note?.trim() ? ` · ${game.note.trim()}` : ''}
           </span>
-          <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
-            Detaljer
-          </a>
+          <span className="foot-links">
+            {mapsHref && (
+              <a className="maps-link" href={mapsHref} target="_blank" rel="noreferrer">
+                Maps
+              </a>
+            )}
+            <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
+              Detaljer
+            </a>
+          </span>
         </div>
         <AgentActions
           game={game}
@@ -1738,7 +1940,10 @@ function CompetitionBlock({
   competition: Competition
   now: Date
   showDate?: boolean
-  venueMeta: Map<number, { km: number | null; weather: { summary: string } | null }>
+  venueMeta: Map<
+    number,
+    { lat?: number; lon?: number; km: number | null; weather: { summary: string } | null }
+  >
   watched: Set<string>
   shortlistIds: Set<number>
   notes: Record<string, string>
@@ -1769,6 +1974,12 @@ function CompetitionBlock({
           }
           const phase = matchPhase(flat, now)
           const meta = venueMeta.get(game.gameId)
+          const mapsHref =
+            meta?.lat != null && meta?.lon != null
+              ? mapsPlaceUrl({ lat: meta.lat, lon: meta.lon })
+              : game.location?.trim()
+                ? mapsPlaceUrl(game.location.trim())
+                : null
           return (
             <li
               key={game.gameId}
@@ -1798,9 +2009,16 @@ function CompetitionBlock({
                   {meta?.weather?.summary ? ` · ${meta.weather.summary}` : ''}
                   {game.note?.trim() ? ` · ${game.note.trim()}` : ''}
                 </span>
-                <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
-                  Detaljer
-                </a>
+                <span className="foot-links">
+                  {mapsHref && (
+                    <a className="maps-link" href={mapsHref} target="_blank" rel="noreferrer">
+                      Maps
+                    </a>
+                  )}
+                  <a href={matchUrl(game.url)} target="_blank" rel="noreferrer">
+                    Detaljer
+                  </a>
+                </span>
               </div>
               <AgentActions
                 game={flat}

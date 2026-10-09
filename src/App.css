@@ -700,6 +700,33 @@
   text-decoration: none;
 }
 
+.foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.maps-link {
+  font-weight: 700;
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.maps-link:hover {
+  text-decoration: underline;
+}
+
+a.maps-chip {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.day-route .travel-list {
+  margin-top: 0.65rem;
+}
+
 .timeline-game.shortlisted,
 .game.shortlisted {
   outline: 2px solid rgba(0, 82, 147, 0.25);

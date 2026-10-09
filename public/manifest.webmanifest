@@ -1,24 +1,38 @@
 {
   "name": "Svenska Matcher",
   "short_name": "Matcher",
-  "description": "Scouta svenska fotbollsmatcher – bevaka lag, bygg scoutlista och planera dagen.",
+  "description": "Scouta svenska fotbollsmatcher – planera dagen, hitta vilka matcher du hinner se, navigera dit.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#002b4a",
   "theme_color": "#005293",
   "lang": "sv",
+  "categories": ["sports", "utilities"],
   "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
     {
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "/og.png",
-      "sizes": "512x512",
-      "type": "image/png",
       "purpose": "any"
     }
   ]

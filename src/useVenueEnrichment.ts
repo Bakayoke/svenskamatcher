@@ -22,9 +22,13 @@ export type VenueMeta = {
   weather: WeatherAtKickoff | null
 }
 
-const MAX_GEOCODE = 12
+const MAX_GEOCODE = 28
 
-export function useVenueEnrichment(games: FlatGame[], base: BasePlace | null) {
+export function useVenueEnrichment(
+  games: FlatGame[],
+  base: BasePlace | null,
+  extraLocations: string[] = [],
+) {
   const [geoCache, setGeoCache] = useState<VenueGeoCache>(() => loadVenueGeoCache())
   const [weatherByGame, setWeatherByGame] = useState<Record<number, WeatherAtKickoff>>({})
   const queueRef = useRef(new Set<string>())
@@ -37,11 +41,16 @@ export function useVenueEnrichment(games: FlatGame[], base: BasePlace | null) {
       if (!loc) continue
       counts.set(loc, (counts.get(loc) ?? 0) + 1)
     }
+    for (const loc of extraLocations) {
+      const t = loc?.trim()
+      if (!t) continue
+      counts.set(t, (counts.get(t) ?? 0) + 1000)
+    }
     return [...counts.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([loc]) => loc)
       .slice(0, MAX_GEOCODE)
-  }, [games])
+  }, [games, extraLocations])
 
   useEffect(() => {
     let cancelled = false
@@ -119,7 +128,7 @@ export function useVenueEnrichment(games: FlatGame[], base: BasePlace | null) {
     return map
   }, [games, geoCache, base, weatherByGame])
 
-  return metaByGameId
+  return { metaByGameId, geoCache }
 }
 
 export function sortGamesByDistance(
