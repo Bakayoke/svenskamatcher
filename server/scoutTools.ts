@@ -793,7 +793,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'matches_along_route',
     description:
-      'Hitta matcher längs en bilresa mellan två orter, givet avresetid. Perfekt för Uppsala→Malmö osv.',
+      'Lista alternativa matcher längs en bilresa (användaren väljer vilka att stanna för – inte en do-all-rutt).',
     parameters: {
       type: 'object',
       properties: {
