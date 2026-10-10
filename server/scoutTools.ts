@@ -660,20 +660,16 @@ export async function toolAlongRoute(
   const useHits = pickAlongAlternatives(hits, totalKm, 16)
   const chain = optimizeAlongRoute(hits, watch, totalKm)
 
-  const lines = useHits.map(
-    (h, i) =>
-      `${i + 1}. ${summarizeMatch(h, `~${Math.round(h.progress * 100)}% av vägen · tidigast framme ca ${clockFromMs(h.etaMs)} · ${formatKm(h.corridorKm)} från vägen`)}`,
-  )
-
+  // Keep summary short — the UI renders the match list; avoid duplicating it as prose.
   let summary =
     useHits.length === 0
-      ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km, ${mapped.length} kartlagda av ${games.length}). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}. Orter längs vägen: ${townHints.slice(0, 12).join(', ') || '—'}.`
-      : `Matcher du kan hinna till längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, ca ${formatKm(totalKm)}, korridor ${corridorKm} km).\nDetta är alternativ – du hinner inte alla; välj en eller några att stanna för:\n${lines.join('\n')}`
+      ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}).`
+      : `${useHits.length} alternativ längs ${fromP.label} → ${toP.label}`
 
   if (useHits.length > 0 && chain.length >= 2) {
-    summary += `\n\nExempel på kombination som går ihop tidsmässigt (${watch} min/match): ${chain
-      .map((h) => `${h.home}–${h.away} (${h.date.slice(11, 16)})`)
-      .join(' → ')}.`
+    summary += ` · t.ex. ${chain
+      .map((h) => `${h.home}–${h.away}`)
+      .join(' → ')}`
   }
 
   return {

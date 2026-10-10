@@ -946,10 +946,15 @@ export default function App() {
     askInputRef.current?.focus()
   }, [showChat, assistantTab])
 
-  function renderAskMatches(result: ScoutAskResult) {
+  function renderAskMatches(result: ScoutAskResult, opts?: { listFirst?: boolean }) {
+    const listFirst = opts?.listFirst ?? false
+    const showAnswer = Boolean(result.answer) && (!listFirst || result.matches.length === 0)
     return (
       <div className="ask-result">
-        <p className="ask-answer">{result.answer}</p>
+        {showAnswer && <p className="ask-answer">{result.answer}</p>}
+        {listFirst && result.matches.length > 0 && (
+          <p className="hint inline-hint">Välj en eller några att stanna för.</p>
+        )}
         {result.matches.length > 0 && (
           <>
             <ul className="ask-match-list">
@@ -1990,7 +1995,7 @@ export default function App() {
                     </button>
                   </div>
                   {alongError && <p className="hint warn">{alongError}</p>}
-                  {alongResult && renderAskMatches(alongResult)}
+                  {alongResult && renderAskMatches(alongResult, { listFirst: true })}
                 </>
               )}
 
