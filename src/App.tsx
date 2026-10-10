@@ -1186,12 +1186,6 @@ export default function App() {
                     </div>
                   </>
                 )}
-                <p className="hint inline-hint">
-                  {askResult.mode === 'ai' ? 'AI + sidans data' : 'Regelmotor + sidans data'}
-                  {askResult.toolsUsed.length > 0
-                    ? ` · ${askResult.toolsUsed.join(', ')}`
-                    : ''}
-                </p>
               </div>
             )}
           </section>
