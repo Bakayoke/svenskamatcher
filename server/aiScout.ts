@@ -244,19 +244,18 @@ export async function askScout(
     }
   }
 
-  let mode: 'ai' | 'rules' = 'rules'
+  const mode: 'ai' | 'rules' = 'rules'
   const heuristic = heuristicPlan(trimmed, ctx)
   let plan = heuristic
+  const strong = isStrongPlan(heuristic)
 
-  // Never let the LLM replace a strong travel/day-route plan with a loose search.
-  if (ai && !isStrongPlan(heuristic)) {
+  // Strong travel/day plans stay on the fast rule path (no LLM plan/polish).
+  // AI is only used for vague queries where tools are unclear.
+  if (ai && !strong) {
     const aiPlan = await planWithAi(ai, trimmed, ctx)
     if (aiPlan && aiPlan.length > 0) {
       plan = aiPlan
-      mode = 'ai'
     }
-  } else if (ai && isStrongPlan(heuristic)) {
-    mode = 'ai'
   }
 
   if (plan.length === 0) {
@@ -285,18 +284,17 @@ export async function askScout(
     }
   }
 
-  const toolText = results.map((r) => r.summary).join('\n\n')
   let answer = fallbackAnswer(results)
-  if (ai) {
-    const polished = await answerWithAi(ai, trimmed, toolText)
-    // Prefer tool summary if model invents extra matches or drops feasibility framing
-    if (polished && !/inventerad|tyvärr kan jag inte/i.test(polished)) {
-      const feasible = results.some((r) => r.meta?.feasibleOnly || r.meta?.chained)
-      if (feasible || polished.length < toolText.length + 80) {
-        answer = polished
-      }
-    }
+  // Optional short polish only for weak/generic searches (saves 1–2s on route questions)
+  if (ai && !strong && !isStrongPlan(plan)) {
+    const polished = await answerWithAi(ai, trimmed, results.map((r) => r.summary).join('\n\n'))
+    if (polished && polished.length < 900) answer = polished
   }
 
-  return { answer, matches: matches.slice(0, 20), toolsUsed, mode }
+  return {
+    answer,
+    matches: matches.slice(0, 20),
+    toolsUsed,
+    mode: ai && !strong ? 'ai' : 'rules',
+  }
 }

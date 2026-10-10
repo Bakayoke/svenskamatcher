@@ -1,5 +1,6 @@
-import { geocodePlace, type GeoPoint } from './places.ts'
+import { geocodePlace, geocodePlacesMany, type GeoPoint } from './places.ts'
 import { getMatches, type Competition } from './matches.ts'
+import { SE_CITIES, lookupSwedishPlace } from './seCities.ts'
 import {
   clockFromMs,
   distanceToSegmentKm,
@@ -37,49 +38,12 @@ export type ScoutContext = {
   query?: string
 }
 
-const MAX_GEOCODE = 60
+const MAX_GEOCODE = 36
 const DEFAULT_WATCH = 75
 const ARRIVE_BUFFER = 15
-const CORRIDOR_KM = 55
+const CORRIDOR_KM = 95
 /** How long you may wait at a stop after earliest arrival before kickoff. */
 const MAX_WAIT_AFTER_ETA_H = 12
-
-/** Towns roughly along common SE corridors (E4/E6) – used to prioritize geocoding. */
-const CORRIDOR_TOWNS = [
-  'uppsala',
-  'märsta',
-  'stockholm',
-  'solna',
-  'sollentuna',
-  'södertälje',
-  'nyköping',
-  'norrköping',
-  'linköping',
-  'mjölby',
-  'tranås',
-  'järrfälla',
-  'järfälla',
-  'eskilstuna',
-  'västerås',
-  'örebro',
-  'nässjö',
-  'jönköping',
-  'värnamo',
-  'växjö',
-  'ljungby',
-  'hässleholm',
-  'kristianstad',
-  'helsingborg',
-  'lund',
-  'malmö',
-  'landskrona',
-  'trelleborg',
-  'kalmar',
-  'växjö',
-  'alvesta',
-  'höör',
-  'ängelholm',
-]
 
 function isoToday() {
   const d = new Date()
@@ -136,9 +100,7 @@ function prioritizeLocations(locations: string[], hints: string[] = []): string[
     for (const h of hintSet) {
       if (h.length >= 3 && l.includes(h)) s += 10
     }
-    for (const t of CORRIDOR_TOWNS) {
-      if (l.includes(t)) s += 3
-    }
+    if (lookupSwedishPlace(l)) s += 5
     return s
   }
   return unique.sort((a, b) => score(b) - score(a) || a.localeCompare(b, 'sv'))
@@ -149,17 +111,26 @@ async function geocodeMany(
   limit = MAX_GEOCODE,
   hints: string[] = [],
 ): Promise<Record<string, GeoPoint>> {
-  const out: Record<string, GeoPoint> = {}
   const ordered = prioritizeLocations(locations, hints).slice(0, limit)
-  for (const loc of ordered) {
-    try {
-      const point = await geocodePlace(loc)
-      if (point) out[loc.toLowerCase()] = point
-    } catch {
-      // skip
-    }
+  return geocodePlacesMany(ordered, limit)
+}
+
+/** Towns whose centers lie near the drive segment, ordered along the route. */
+function townsAlongDrive(from: LatLon, to: LatLon, corridorKm: number): Array<{ name: string; t: number }> {
+  const out: Array<{ name: string; t: number }> = []
+  for (const [name, city] of Object.entries(SE_CITIES)) {
+    const seg = distanceToSegmentKm(city, from, to)
+    if (seg.km > corridorKm) continue
+    out.push({ name, t: seg.t })
   }
-  return out
+  out.sort((a, b) => a.t - b.t)
+  // unique labels preferring first occurrence
+  const seen = new Set<string>()
+  return out.filter((x) => {
+    if (seen.has(x.name)) return false
+    seen.add(x.name)
+    return true
+  })
 }
 
 function attachCoords(
@@ -569,19 +540,27 @@ export async function toolAlongRoute(
   }
 
   const day = args.day ?? ctx.from ?? isoToday()
-  // Long southbound trips: include next calendar day for evening matches near destination
+  const corridorKm = args.corridorKm ?? CORRIDOR_KM
+  // Long trips: include next calendar day for evening matches near destination
   const dayEnd = new Date(`${day}T12:00:00`)
   dayEnd.setDate(dayEnd.getDate() + 1)
   const toDay = `${dayEnd.getFullYear()}-${String(dayEnd.getMonth() + 1).padStart(2, '0')}-${String(dayEnd.getDate()).padStart(2, '0')}`
   const games = await loadGames({ ...ctx, from: day, to: toDay })
-  const hints = [args.fromPlace, args.toPlace, fromP.label, toP.label, ...CORRIDOR_TOWNS]
-  const geo = await geocodeMany(
-    games.map((g) => g.location),
-    MAX_GEOCODE,
-    hints,
-  )
-  const mapped = attachCoords(games, geo)
-  const corridorKm = args.corridorKm ?? CORRIDOR_KM
+
+  const alongTowns = townsAlongDrive(fromP, toP, corridorKm)
+  const townHints = alongTowns.map((t) => t.name)
+  // Prefer venues that mention towns on the corridor (avoids geocoding only Stockholm noise)
+  const preferred = games.filter((g) => {
+    const loc = g.location.toLowerCase()
+    return townHints.some((t) => t.length >= 4 && loc.includes(t))
+  })
+  const pool = preferred.length >= 8 ? preferred : games
+  const geo = await geocodeMany(pool.map((g) => g.location), MAX_GEOCODE, [
+    args.fromPlace,
+    args.toPlace,
+    ...townHints,
+  ])
+  const mapped = attachCoords(pool, geo)
   const depart = localDateTime(day, args.departTime ?? '08:00').getTime()
   const totalKm = haversineKm(fromP, toP)
   const totalDrive = estimateDriveMinutes(totalKm)
@@ -594,13 +573,14 @@ export async function toolAlongRoute(
       kmAlong: number
       etaMs: number
       slackMinutes: number
+      progress: number
     }
 
   const hits: Hit[] = []
   for (const g of mapped) {
     const seg = distanceToSegmentKm(g, fromP, toP)
-    const nearStart = haversineKm(fromP, g) <= corridorKm
-    const nearEnd = haversineKm(toP, g) <= corridorKm
+    const nearStart = haversineKm(fromP, g) <= Math.min(40, corridorKm)
+    const nearEnd = haversineKm(toP, g) <= Math.min(40, corridorKm)
     const onCorridor = seg.km <= corridorKm && seg.t >= -0.02 && seg.t <= 1.02
     if (!onCorridor && !nearStart && !nearEnd) continue
 
@@ -618,56 +598,52 @@ export async function toolAlongRoute(
       kmAlong,
       etaMs,
       slackMinutes: slack,
+      progress: t,
     })
   }
 
   hits.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
 
-  // Feasible chain progressing along the route (not just any day route)
-  const chain = optimizeAlongRoute(hits, watch)
+  const chain = optimizeAlongRoute(hits, watch, totalKm)
+  const spread = spreadAlongRoute(hits, totalKm, 8)
 
   const useHits =
-    chain.length > 0
-      ? chain.map((h) => ({
-          match: h as ScoutMatch & LatLon,
-          eta: clockFromMs(h.etaMs),
-          side: `${formatKm(h.corridorKm)} från vägen · passerar ca ${clockFromMs(h.etaMs)}`,
-        }))
-      : hits.slice(0, 15).map((h) => ({
-          match: h as ScoutMatch & LatLon,
-          eta: clockFromMs(h.etaMs),
-          side: `${formatKm(h.corridorKm)} från vägen · tidigast framme ca ${clockFromMs(h.etaMs)}`,
-        }))
+    chain.length >= 2
+      ? chain
+      : spread.length > 0
+        ? spread
+        : hits.slice(0, 12)
 
   const lines = useHits.map(
-    (row, i) => `${i + 1}. ${summarizeMatch(row.match, `ETA ca ${row.eta} · ${row.side}`)}`,
+    (h, i) =>
+      `${i + 1}. ${summarizeMatch(h, `~${Math.round(h.progress * 100)}% av vägen · ETA ca ${clockFromMs(h.etaMs)} · ${formatKm(h.corridorKm)} från vägen`)}`,
   )
 
   const modeNote =
-    chain.length > 0
-      ? `Genomförbar kedja (${watch} min/match):`
-      : hits.length > 0
-        ? `Alternativ längs vägen (var för sig – tiderna krockar om du försöker alla):`
+    chain.length >= 2
+      ? `Genomförbar kedja längs vägen (${watch} min/match):`
+      : useHits.length > 0
+        ? `Alternativ spridda längs vägen (korridor ${corridorKm} km – välj några, inte alla):`
         : ''
 
   return {
     ok: true,
     summary:
       useHits.length === 0
-        ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km, ${mapped.length} kartlagda av ${games.length}). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}. Prova annat datum eller bredare urval.`
+        ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km, ${mapped.length} kartlagda av ${games.length}). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}. Orter längs vägen: ${townHints.slice(0, 12).join(', ') || '—'}.`
         : `${modeNote} ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, ca ${formatKm(totalKm)}):\n${lines.join('\n')}`,
-    matches: useHits.map((row) => ({
-      gameId: row.match.gameId,
-      date: row.match.date,
-      home: row.match.home,
-      away: row.match.away,
-      competitionName: row.match.competitionName,
-      location: row.match.location,
-      genderName: row.match.genderName,
-      ageCategoryName: row.match.ageCategoryName,
-      url: row.match.url,
-      lat: row.match.lat,
-      lon: row.match.lon,
+    matches: useHits.map((g) => ({
+      gameId: g.gameId,
+      date: g.date,
+      home: g.home,
+      away: g.away,
+      competitionName: g.competitionName,
+      location: g.location,
+      genderName: g.genderName,
+      ageCategoryName: g.ageCategoryName,
+      url: g.url,
+      lat: g.lat,
+      lon: g.lon,
     })),
     meta: {
       from: fromP.label,
@@ -677,44 +653,70 @@ export async function toolAlongRoute(
       totalKm,
       totalDriveMinutes: totalDrive,
       corridorKm,
-      chained: chain.length > 0,
+      chained: chain.length >= 2,
       candidates: hits.length,
       mapped: mapped.length,
       watchMinutes: watch,
+      towns: townHints.slice(0, 20),
     },
   }
 }
 
-/** Greedy feasible picks ordered by progress along the drive. */
-function optimizeAlongRoute(
-  hits: Array<
-    ScoutMatch &
-      LatLon & {
-        corridorKm: number
-        kmAlong: number
-        etaMs: number
-        slackMinutes: number
-      }
-  >,
-  watchMinutes: number,
-) {
+type AlongHit = ScoutMatch &
+  LatLon & {
+    corridorKm: number
+    kmAlong: number
+    etaMs: number
+    slackMinutes: number
+    progress: number
+  }
+
+/** Pick up to N matches from different segments of the drive (avoids all-Stockholm). */
+function spreadAlongRoute(hits: AlongHit[], totalKm: number, limit: number): AlongHit[] {
+  if (hits.length === 0 || totalKm <= 0) return []
+  const buckets = 5
+  const byBucket: AlongHit[][] = Array.from({ length: buckets }, () => [])
+  for (const h of hits) {
+    const b = Math.min(buckets - 1, Math.floor(h.progress * buckets))
+    byBucket[b]!.push(h)
+  }
+  const picked: AlongHit[] = []
+  const seen = new Set<number>()
+  // Round-robin across buckets so mid/south route gets slots
+  for (let round = 0; round < 3 && picked.length < limit; round++) {
+    for (let b = 0; b < buckets && picked.length < limit; b++) {
+      const list = byBucket[b]!
+      const next = list.find((h) => !seen.has(h.gameId))
+      if (!next) continue
+      // Prefer not stacking many in first 15% when later buckets exist
+      if (b === 0 && round > 0 && byBucket.slice(1).some((x) => x.length > 0)) continue
+      seen.add(next.gameId)
+      picked.push(next)
+    }
+  }
+  return picked.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
+}
+
+/** Greedy feasible picks that must advance along the drive. */
+function optimizeAlongRoute(hits: AlongHit[], watchMinutes: number, totalKm: number) {
   const sorted = hits.slice().sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
-  const picked: typeof hits = []
+  const picked: AlongHit[] = []
   let leaveAt = 0
-  let last: (typeof hits)[number] | null = null
+  let last: AlongHit | null = null
+  const minAdvanceKm = Math.max(25, totalKm * 0.12)
 
   for (const h of sorted) {
     const kickoff = parseKickoff(h.date).getTime()
     const need = kickoff - ARRIVE_BUFFER * 60000
     if (!last) {
       if (h.etaMs > need) continue
+      // Prefer not starting with a stop that is barely past origin if later options exist
       picked.push(h)
       leaveAt = kickoff + watchMinutes * 60000
       last = h
       continue
     }
-    // Must move further along the route (or same area) and be reachable after previous watch
-    if (h.kmAlong + 5 < last.kmAlong) continue
+    if (h.kmAlong < last.kmAlong + minAdvanceKm) continue
     const legKm = haversineKm(last, h)
     const drive = estimateDriveMinutes(legKm)
     const arrive = Math.max(leaveAt + drive * 60000, h.etaMs)

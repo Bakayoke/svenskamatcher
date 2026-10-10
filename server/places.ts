@@ -1,4 +1,6 @@
-/** Geocode (Nominatim) + weather (Open-Meteo). Shared by Vite middleware and Worker. */
+/** Geocode (static cities → Open-Meteo → Nominatim) + weather (Open-Meteo). */
+
+import { lookupSwedishPlace } from './seCities.ts'
 
 export type GeoPoint = {
   lat: number
@@ -61,14 +63,29 @@ async function throttleNominatim<T>(fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-export async function geocodePlace(query: string): Promise<GeoPoint | null> {
-  const q = query.trim()
-  if (!q || q.length < 2) return null
-  const key = normalizeQuery(q)
-  const cached = cacheGet(geoCache, key)
-  if (cached !== undefined) return cached
+async function geocodeOpenMeteo(q: string): Promise<GeoPoint | null> {
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search')
+  url.searchParams.set('name', q)
+  url.searchParams.set('count', '1')
+  url.searchParams.set('language', 'sv')
+  url.searchParams.set('countryCode', 'SE')
+  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } })
+  if (!res.ok) return null
+  const data = (await res.json()) as {
+    results?: Array<{ name: string; latitude: number; longitude: number; admin1?: string }>
+  }
+  const row = data.results?.[0]
+  if (!row) return null
+  return {
+    lat: row.latitude,
+    lon: row.longitude,
+    label: row.admin1 ? `${row.name}, ${row.admin1}` : row.name,
+    query: q,
+  }
+}
 
-  const point = await throttleNominatim(async () => {
+async function geocodeNominatim(q: string): Promise<GeoPoint | null> {
+  return throttleNominatim(async () => {
     const url = new URL('https://nominatim.openstreetmap.org/search')
     url.searchParams.set('q', `${q}, Sverige`)
     url.searchParams.set('format', 'json')
@@ -100,9 +117,88 @@ export async function geocodePlace(query: string): Promise<GeoPoint | null> {
       query: q,
     }
   })
+}
+
+export async function geocodePlace(query: string): Promise<GeoPoint | null> {
+  const q = query.trim()
+  if (!q || q.length < 2) return null
+  const key = normalizeQuery(q)
+  const cached = cacheGet(geoCache, key)
+  if (cached !== undefined) return cached
+
+  const local = lookupSwedishPlace(q)
+  if (local) {
+    const point: GeoPoint = {
+      lat: local.lat,
+      lon: local.lon,
+      label: local.label,
+      query: q,
+    }
+    cacheSet(geoCache, key, point, GEO_TTL_MS)
+    return point
+  }
+
+  let point: GeoPoint | null = null
+  try {
+    point = await geocodeOpenMeteo(q)
+  } catch {
+    point = null
+  }
+  if (!point) {
+    try {
+      point = await geocodeNominatim(q)
+    } catch {
+      point = null
+    }
+  }
 
   cacheSet(geoCache, key, point, GEO_TTL_MS)
   return point
+}
+
+/** Parallel geocode with static/Open-Meteo first (much faster than Nominatim queue). */
+export async function geocodePlacesMany(
+  queries: string[],
+  limit = 40,
+): Promise<Record<string, GeoPoint>> {
+  const unique = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, limit)
+  const out: Record<string, GeoPoint> = {}
+
+  // Instant static hits
+  const needNet: string[] = []
+  for (const q of unique) {
+    const local = lookupSwedishPlace(q)
+    if (local) {
+      const point: GeoPoint = { lat: local.lat, lon: local.lon, label: local.label, query: q }
+      out[q.toLowerCase()] = point
+      cacheSet(geoCache, normalizeQuery(q), point, GEO_TTL_MS)
+    } else {
+      const cached = cacheGet(geoCache, normalizeQuery(q))
+      if (cached) out[q.toLowerCase()] = cached
+      else needNet.push(q)
+    }
+  }
+
+  // Open-Meteo in small parallel batches
+  const batchSize = 6
+  for (let i = 0; i < needNet.length; i += batchSize) {
+    const batch = needNet.slice(i, i + batchSize)
+    const settled = await Promise.all(
+      batch.map(async (q) => {
+        try {
+          const point = await geocodePlace(q)
+          return [q, point] as const
+        } catch {
+          return [q, null] as const
+        }
+      }),
+    )
+    for (const [q, point] of settled) {
+      if (point) out[q.toLowerCase()] = point
+    }
+  }
+
+  return out
 }
 
 const WMO: Record<number, string> = {
