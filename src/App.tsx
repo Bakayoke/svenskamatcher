@@ -102,6 +102,37 @@ function rangeLength(range: DateRange | undefined) {
   return Math.floor(ms / 86400000) + 1
 }
 
+/** Show saved shortlist even when matches are outside the loaded date range. */
+function shortlistToGames(items: ShortlistedMatch[], live: FlatGame[]): FlatGame[] {
+  const byId = new Map(live.map((g) => [g.gameId, g]))
+  return items
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((s) => {
+      const hit = byId.get(s.gameId)
+      if (hit) return hit
+      return {
+        gameId: s.gameId,
+        date: s.date,
+        dateFormatted: s.date,
+        location: s.location,
+        url: s.url,
+        homeTeam: { name: s.home, teamImageUrl: '', teamImageAlt: s.home },
+        awayTeam: { name: s.away, teamImageUrl: '', teamImageAlt: s.away },
+        competitionName: s.competitionName,
+        competitionId: 0,
+        genderName: '',
+        ageCategoryName: '',
+        score: { home: 0, away: 0 },
+        status: 5,
+        referees: [],
+        note: '',
+        homeTeamClubAssociationId: 0,
+        awayTeamClubAssociationId: 0,
+      }
+    })
+}
+
 function genderShort(name: string) {
   if (name === 'Man') return 'Herr'
   if (name === 'Kvinna') return 'Dam'
@@ -393,11 +424,10 @@ export default function App() {
   const flat = useMemo(() => flattenGames(filteredCompetitions), [filteredCompetitions])
 
   const scouted = useMemo(() => {
+    // Scoutlista = all saved matches, not "saved ∩ current day/filters"
+    if (showShortlistOnly) return shortlistToGames(shortlist, flat)
+
     let games = flat.filter((g) => matchesPreset(g, preset, watchTeams))
-    if (showShortlistOnly) {
-      const ids = new Set(shortlist.map((s) => s.gameId))
-      games = games.filter((g) => ids.has(g.gameId))
-    }
     if (teamFocus) {
       const t = teamFocus.trim().toLowerCase()
       games = games.filter(
@@ -417,16 +447,14 @@ export default function App() {
           g.awayTeam.name.toLowerCase().includes(tag),
       )
     }
-    if (parentMode && watchTeams.length > 0 && preset === 'watch') {
-      // already filtered by watch preset
-    }
     return games
-  }, [flat, preset, watchTeams, showShortlistOnly, shortlist, teamFocus, youthChip, parentMode])
+  }, [flat, preset, watchTeams, showShortlistOnly, shortlist, teamFocus, youthChip])
 
   const clusters = useMemo(() => buildClusters(scouted), [scouted])
 
   const focused = useMemo(() => {
-    let games = filterByFocus(scouted, focus, now)
+    // Shortlist view: show every saved match regardless of Kommande/Pågår chips
+    let games = showShortlistOnly ? scouted : filterByFocus(scouted, focus, now)
     if (clusterId) {
       const cluster = clusters.find((c) => c.id === clusterId)
       if (cluster) {
@@ -435,7 +463,7 @@ export default function App() {
       }
     }
     return games
-  }, [scouted, focus, now, clusterId, clusters])
+  }, [scouted, focus, now, clusterId, clusters, showShortlistOnly])
 
   const shortlistLocations = useMemo(
     () => shortlist.map((s) => s.location).filter(Boolean),
@@ -946,6 +974,7 @@ export default function App() {
           <button
             type="button"
             className={`chip ${parentMode ? 'active' : ''}`}
+            title="Färre filter – fokuserar på dina lag och döljer scout-/ålderssnabbval"
             onClick={() => {
               const next = !parentMode
               setParentMode(next)
@@ -953,62 +982,79 @@ export default function App() {
               if (next && watchTeams.length > 0) setPreset('watch')
             }}
           >
-            Föräldraläge
+            Förenklad
           </button>
         </div>
 
-        <div className="focus-row" role="group" aria-label="Scoutläge">
-          {(
-            [
-              ['all', 'Alla'],
-              ['elit', 'Elit'],
-              ['ungdom', 'Ungdom'],
-              ['dam', 'Dam'],
-              ['watch', `Mina lag (${watchTeams.length})`],
-            ] as const
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className={`chip ${preset === key ? 'active' : ''}`}
-              onClick={() => setPreset(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {!showShortlistOnly && (
+          <>
+            <div className="focus-row" role="group" aria-label="Kategori">
+              {(
+                [
+                  ['all', 'Alla'],
+                  ['elit', 'Elit'],
+                  ['ungdom', 'Ungdom'],
+                  ['dam', 'Dam'],
+                  ['watch', `Mina lag (${watchTeams.length})`],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`chip ${preset === key ? 'active' : ''}`}
+                  onClick={() => setPreset(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
 
-        <div className="focus-row" role="group" aria-label="Visa">
-          {(
-            [
-              ['overview', 'Kommande', phases.live + phases.soon + phases.later],
-              ['live', 'Pågår', phases.live],
-              ['soon', 'Nu & snart', phases.live + phases.soon],
-              ['results', 'Resultat', phases.done],
-              ['all', 'Alla tider', scouted.length],
-            ] as const
-          ).map(([key, label, count]) => (
-            <button
-              key={key}
-              type="button"
-              className={`chip focus-chip ${focus === key ? 'active' : ''} ${key === 'live' && phases.live > 0 ? 'has-live' : ''}`}
-              onClick={() => setFocus(key)}
-            >
-              {label}
-              <span className="count">{count}</span>
-            </button>
-          ))}
+            <div className="focus-row" role="group" aria-label="Tid">
+              {(
+                [
+                  ['overview', 'Kommande', phases.live + phases.soon + phases.later],
+                  ['live', 'Pågår', phases.live],
+                  ['results', 'Resultat', phases.done],
+                  ['all', 'Alla', scouted.length],
+                ] as const
+              ).map(([key, label, count]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`chip focus-chip ${focus === key ? 'active' : ''} ${key === 'live' && phases.live > 0 ? 'has-live' : ''}`}
+                  onClick={() => setFocus(key)}
+                >
+                  {label}
+                  <span className="count">{count}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="focus-row tools-row" role="group" aria-label="Verktyg">
           <button
             type="button"
             className={`chip ${showShortlistOnly ? 'active' : ''}`}
-            onClick={() => setShowShortlistOnly((v) => !v)}
+            title="Sparade matcher att scouta – oberoende av datumfilter"
+            onClick={() => {
+              setShowShortlistOnly((v) => !v)
+              setShowAsk(false)
+              setShowDayRoute(false)
+            }}
           >
-            Scoutlista ({shortlist.length})
+            Scoutlista{shortlist.length > 0 ? ` (${shortlist.length})` : ''}
           </button>
           <button
             type="button"
             className={`chip ${showAsk ? 'active' : ''}`}
-            onClick={() => setShowAsk((v) => !v)}
+            onClick={() => {
+              setShowAsk((v) => !v)
+              if (!showAsk) {
+                setShowDayRoute(false)
+                setShowShortlistOnly(false)
+              }
+            }}
             title="Fråga om matcher, dagsrutt eller resa"
           >
             Fråga
@@ -1016,40 +1062,64 @@ export default function App() {
           <button
             type="button"
             className={`chip ${showDayRoute ? 'active' : ''}`}
-            onClick={() => setShowDayRoute((v) => !v)}
+            onClick={() => {
+              setShowDayRoute((v) => !v)
+              if (!showDayRoute) {
+                setShowAsk(false)
+                setShowShortlistOnly(false)
+              }
+            }}
             title="Hitta vilka matcher du hinner se samma dag"
           >
             Hinner jag?
           </button>
-          {shortlist.length > 0 && (
-            <>
-              <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
-                {listaCopied ? 'Listlänk kopierad' : 'Dela scoutlista'}
-              </button>
-              <button
-                type="button"
-                className={`chip ${showTravel ? 'active' : ''}`}
-                onClick={() => setShowTravel((v) => !v)}
-              >
-                Resplan
-              </button>
-              <button type="button" className="chip" onClick={exportShortlistIcs}>
-                Exportera .ics
-              </button>
-              <button type="button" className="chip" onClick={exportShortlistCsvFile}>
-                .csv
-              </button>
-              <button type="button" className="chip" onClick={exportShortlistJsonFile}>
-                .json
-              </button>
-            </>
-          )}
-          <button type="button" className="chip no-print" onClick={() => window.print()}>
-            Skriv ut dagsplan
-          </button>
         </div>
 
-        {shortlistConflicts.length > 0 && (
+        {showShortlistOnly && (
+          <div className="shortlist-toolbar no-print">
+            <p className="cluster-lede">
+              {shortlist.length === 0
+                ? 'Inga sparade matcher ännu. Tryck “+ Lista” på en match för att lägga till.'
+                : `${shortlist.length} sparade matcher (visas även om de ligger utanför valt datum).`}
+            </p>
+            {shortlist.length > 0 && (
+              <div className="chip-row tight">
+                <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
+                  {listaCopied ? 'Listlänk kopierad' : 'Dela lista'}
+                </button>
+                <button
+                  type="button"
+                  className={`chip ${showTravel ? 'active' : ''}`}
+                  onClick={() => setShowTravel((v) => !v)}
+                >
+                  Resplan
+                </button>
+                <details className="export-menu">
+                  <summary className="chip">Exportera</summary>
+                  <div className="export-menu-items">
+                    <button type="button" className="chip" onClick={exportShortlistIcs}>
+                      Kalender (.ics)
+                    </button>
+                    <button type="button" className="chip" onClick={exportShortlistCsvFile}>
+                      CSV
+                    </button>
+                    <button type="button" className="chip" onClick={exportShortlistJsonFile}>
+                      JSON
+                    </button>
+                    <button type="button" className="chip" onClick={() => window.print()}>
+                      Skriv ut
+                    </button>
+                  </div>
+                </details>
+                <button type="button" className="chip" onClick={() => setShowShortlistOnly(false)}>
+                  Tillbaka till matcher
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {shortlistConflicts.length > 0 && showShortlistOnly && (
           <p className="hint warn">
             Tidskonflikt i scoutlistan: {shortlistConflicts.length} kickoff-tider har flera matcher.
             {showTravel ? '' : ' Öppna Resplan för översikt.'}
@@ -1837,7 +1907,7 @@ export default function App() {
               {teamFocus
                 ? `Inga matcher för ${teamFocus} i valt intervall/filter.`
                 : showShortlistOnly
-                  ? 'Scoutlistan är tom för valt datum/filter.'
+                  ? 'Scoutlistan är tom. Lägg till matcher med “+ Lista”.'
                   : preset === 'watch'
                     ? watchTeams.length === 0
                       ? 'Inga bevakade lag ännu.'

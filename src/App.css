@@ -76,6 +76,52 @@
   align-items: center;
 }
 
+.tools-row {
+  padding-top: 0.15rem;
+  border-top: 1px solid var(--line);
+}
+
+.shortlist-toolbar {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(0, 82, 147, 0.05);
+  border: 1px solid var(--line);
+}
+
+.shortlist-toolbar .cluster-lede {
+  margin: 0;
+}
+
+.export-menu {
+  position: relative;
+}
+
+.export-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.export-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.export-menu-items {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.45rem;
+  min-width: 10rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 43, 74, 0.12);
+}
+
 .layout-row {
   justify-content: space-between;
 }
