@@ -727,6 +727,48 @@ a.maps-chip {
   margin-top: 0.65rem;
 }
 
+.ask-panel .ask-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.55rem 0 0.75rem;
+}
+
+.ask-panel .ask-examples .chip {
+  text-align: left;
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  line-height: 1.25;
+  padding-block: 0.45rem;
+}
+
+.along-form {
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line);
+}
+
+.ask-result {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.ask-answer {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+  color: #243028;
+}
+
+.ask-match-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
 .timeline-game.shortlisted,
 .game.shortlisted {
   outline: 2px solid rgba(0, 82, 147, 0.25);

@@ -71,6 +71,13 @@ import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlS
 import { bootFromPathname, isoDay, navigateSeo } from './pathState'
 import { YOUTH_AGE_CHIPS, teamPath } from './seoRoutes'
 import {
+  ASK_EXAMPLES,
+  alongRouteApi,
+  askScoutApi,
+  type ScoutAskMatch,
+  type ScoutAskResult,
+} from './aiScoutApi'
+import {
   clockFromMs,
   DEFAULT_DAY_ROUTE,
   formatDrive,
@@ -209,6 +216,15 @@ export default function App() {
   const [lastScouted, setLastScouted] = useState<LastScouted[]>(() => loadLastScouted())
   const [showTravel, setShowTravel] = useState(false)
   const [showDayRoute, setShowDayRoute] = useState(false)
+  const [showAsk, setShowAsk] = useState(false)
+  const [askDraft, setAskDraft] = useState('')
+  const [askBusy, setAskBusy] = useState(false)
+  const [askError, setAskError] = useState<string | null>(null)
+  const [askResult, setAskResult] = useState<ScoutAskResult | null>(null)
+  const [alongFrom, setAlongFrom] = useState('Uppsala')
+  const [alongTo, setAlongTo] = useState('Malmö')
+  const [alongTime, setAlongTime] = useState('08:00')
+  const [alongBusy, setAlongBusy] = useState(false)
   const [watchMinutes, setWatchMinutes] = useState(60)
   const [youthChip, setYouthChip] = useState<string | null>(null)
 
@@ -527,6 +543,81 @@ export default function App() {
     setShortlist(next)
     setShowShortlistOnly(true)
     setShowTravel(true)
+  }
+
+  const scoutAskContext = useMemo(
+    () => ({
+      from: fromIso,
+      to: toIso,
+      baseQuery: basePlace?.query,
+      baseLat: basePlace?.lat,
+      baseLon: basePlace?.lon,
+      gender: filters.gender,
+      ageCategory: filters.ageCategory === 'all' ? undefined : filters.ageCategory,
+      query: filters.query || undefined,
+    }),
+    [fromIso, toIso, basePlace, filters.gender, filters.ageCategory, filters.query],
+  )
+
+  function addAskMatchesToShortlist(matches: ScoutAskMatch[]) {
+    let next = shortlist.slice()
+    for (const m of matches) {
+      if (next.some((s) => s.gameId === m.gameId)) continue
+      next.push({
+        gameId: m.gameId,
+        date: m.date,
+        home: m.home,
+        away: m.away,
+        competitionName: m.competitionName,
+        location: m.location,
+        url: m.url,
+        savedAt: new Date().toISOString(),
+      })
+    }
+    saveShortlist(next)
+    setShortlist(next)
+    setShowShortlistOnly(true)
+  }
+
+  async function submitAsk(message?: string) {
+    const text = (message ?? askDraft).trim()
+    if (!text) return
+    setAskDraft(text)
+    setAskBusy(true)
+    setAskError(null)
+    try {
+      const result = await askScoutApi(text, scoutAskContext)
+      setAskResult(result)
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : 'Kunde inte fråga')
+    } finally {
+      setAskBusy(false)
+    }
+  }
+
+  async function submitAlongRoute() {
+    setAlongBusy(true)
+    setAskError(null)
+    try {
+      const result = await alongRouteApi({
+        fromPlace: alongFrom,
+        toPlace: alongTo,
+        departTime: alongTime,
+        day: fromIso,
+        context: scoutAskContext,
+      })
+      setAskResult({
+        answer: result.summary,
+        matches: result.matches,
+        toolsUsed: ['matches_along_route'],
+        mode: 'rules',
+      })
+      setShowAsk(true)
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : 'Kunde inte söka längs vägen')
+    } finally {
+      setAlongBusy(false)
+    }
   }
 
   const gameCount = focused.length
@@ -916,6 +1007,14 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={`chip ${showAsk ? 'active' : ''}`}
+            onClick={() => setShowAsk((v) => !v)}
+            title="Fråga om matcher, dagsrutt eller resa"
+          >
+            Fråga
+          </button>
+          <button
+            type="button"
             className={`chip ${showDayRoute ? 'active' : ''}`}
             onClick={() => setShowDayRoute((v) => !v)}
             title="Hitta vilka matcher du hinner se samma dag"
@@ -955,6 +1054,147 @@ export default function App() {
             Tidskonflikt i scoutlistan: {shortlistConflicts.length} kickoff-tider har flera matcher.
             {showTravel ? '' : ' Öppna Resplan för översikt.'}
           </p>
+        )}
+
+        {showAsk && (
+          <section className="travel-plan ask-panel panel no-print" aria-label="Fråga">
+            <h3>Fråga</h3>
+            <p className="cluster-lede">
+              Assistenten svarar bara utifrån matcher på sidan — sök, dagsrutt och bilresa. Använder
+              valt datum{basePlace ? ` och basort ${basePlace.query}` : ''}.
+            </p>
+            <div className="ask-examples">
+              {ASK_EXAMPLES.map((ex) => (
+                <button
+                  key={ex}
+                  type="button"
+                  className="chip"
+                  disabled={askBusy}
+                  onClick={() => void submitAsk(ex)}
+                >
+                  {ex.length > 64 ? `${ex.slice(0, 62)}…` : ex}
+                </button>
+              ))}
+            </div>
+            <label className="field">
+              <span>Din fråga</span>
+              <div className="base-row">
+                <input
+                  type="text"
+                  value={askDraft}
+                  placeholder="T.ex. matcher längs vägen Uppsala–Malmö från 08:00"
+                  disabled={askBusy}
+                  onChange={(e) => setAskDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void submitAsk()
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="chip active"
+                  disabled={askBusy || !askDraft.trim()}
+                  onClick={() => void submitAsk()}
+                >
+                  {askBusy ? 'Söker…' : 'Fråga'}
+                </button>
+              </div>
+            </label>
+
+            <div className="along-form">
+              <p className="cluster-lede" style={{ marginBottom: '0.35rem' }}>
+                Eller: matcher längs bilresa
+              </p>
+              <div className="base-row">
+                <input
+                  type="text"
+                  value={alongFrom}
+                  aria-label="Från"
+                  placeholder="Från"
+                  onChange={(e) => setAlongFrom(e.target.value)}
+                />
+                <input
+                  type="text"
+                  value={alongTo}
+                  aria-label="Till"
+                  placeholder="Till"
+                  onChange={(e) => setAlongTo(e.target.value)}
+                />
+                <input
+                  type="time"
+                  value={alongTime}
+                  aria-label="Avresa"
+                  onChange={(e) => setAlongTime(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="chip"
+                  disabled={alongBusy || !alongFrom.trim() || !alongTo.trim()}
+                  onClick={() => void submitAlongRoute()}
+                >
+                  {alongBusy ? 'Söker…' : 'Längs vägen'}
+                </button>
+              </div>
+            </div>
+
+            {askError && <p className="hint warn">{askError}</p>}
+            {askResult && (
+              <div className="ask-result">
+                <p className="ask-answer">{askResult.answer}</p>
+                {askResult.matches.length > 0 && (
+                  <>
+                    <ul className="ask-match-list">
+                      {askResult.matches.map((m) => (
+                        <li key={m.gameId}>
+                          <strong>
+                            {m.date.slice(0, 10)} {m.date.slice(11, 16)}
+                          </strong>{' '}
+                          {m.home} – {m.away}
+                          <br />
+                          <span>
+                            {m.location} · {m.competitionName}
+                          </span>
+                          <br />
+                          <span className="foot-links">
+                            {m.lat != null && m.lon != null && (
+                              <a
+                                className="maps-link"
+                                href={mapsPlaceUrl({ lat: m.lat, lon: m.lon })}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Maps
+                              </a>
+                            )}
+                            <a href={matchUrl(m.url)} target="_blank" rel="noreferrer">
+                              Detaljer
+                            </a>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="return-actions">
+                      <button
+                        type="button"
+                        className="chip active"
+                        onClick={() => addAskMatchesToShortlist(askResult.matches)}
+                      >
+                        Lägg i scoutlista
+                      </button>
+                    </div>
+                  </>
+                )}
+                <p className="hint inline-hint">
+                  {askResult.mode === 'ai' ? 'AI + sidans data' : 'Regelmotor + sidans data'}
+                  {askResult.toolsUsed.length > 0
+                    ? ` · ${askResult.toolsUsed.join(', ')}`
+                    : ''}
+                </p>
+              </div>
+            )}
+          </section>
         )}
 
         {showDayRoute && (
@@ -1739,8 +1979,8 @@ export default function App() {
         <h2 className="footer-title">Svenska fotbollsmatcher för scouting</h2>
         <p>
           Svenska Matcher hjälper dig att hitta matcher att scouta i Sverige — herr, dam och ungdom.
-          Filtrera på datum, distrikt och liga, planera vilka matcher du hinner se och navigera dit via
-          Google Maps.
+          Filtrera på datum, distrikt och liga, fråga assistenten, planera vilka matcher du hinner se
+          (även längs en bilresa) och navigera dit via Google Maps.
         </p>
         <p>
           Spelarlistor och laguppställningar saknas i öppen data från svenskfotboll.se. Anteckningar,
