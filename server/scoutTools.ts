@@ -604,34 +604,29 @@ export async function toolAlongRoute(
 
   hits.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
 
+  // Alternatives first: many reachable stops to choose from (not a "do all" itinerary)
+  const useHits = pickAlongAlternatives(hits, totalKm, 12)
   const chain = optimizeAlongRoute(hits, watch, totalKm)
-  const spread = spreadAlongRoute(hits, totalKm, 8)
-
-  const useHits =
-    chain.length >= 2
-      ? chain
-      : spread.length > 0
-        ? spread
-        : hits.slice(0, 12)
 
   const lines = useHits.map(
     (h, i) =>
-      `${i + 1}. ${summarizeMatch(h, `~${Math.round(h.progress * 100)}% av vägen · ETA ca ${clockFromMs(h.etaMs)} · ${formatKm(h.corridorKm)} från vägen`)}`,
+      `${i + 1}. ${summarizeMatch(h, `~${Math.round(h.progress * 100)}% av vägen · tidigast framme ca ${clockFromMs(h.etaMs)} · ${formatKm(h.corridorKm)} från vägen`)}`,
   )
 
-  const modeNote =
-    chain.length >= 2
-      ? `Genomförbar kedja längs vägen (${watch} min/match):`
-      : useHits.length > 0
-        ? `Alternativ spridda längs vägen (korridor ${corridorKm} km – välj några, inte alla):`
-        : ''
+  let summary =
+    useHits.length === 0
+      ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km, ${mapped.length} kartlagda av ${games.length}). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}. Orter längs vägen: ${townHints.slice(0, 12).join(', ') || '—'}.`
+      : `Matcher du kan hinna till längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, ca ${formatKm(totalKm)}, korridor ${corridorKm} km).\nDetta är alternativ – du hinner inte alla; välj en eller några att stanna för:\n${lines.join('\n')}`
+
+  if (useHits.length > 0 && chain.length >= 2) {
+    summary += `\n\nExempel på kombination som går ihop tidsmässigt (${watch} min/match): ${chain
+      .map((h) => `${h.home}–${h.away} (${h.date.slice(11, 16)})`)
+      .join(' → ')}.`
+  }
 
   return {
     ok: true,
-    summary:
-      useHits.length === 0
-        ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km, ${mapped.length} kartlagda av ${games.length}). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}. Orter längs vägen: ${townHints.slice(0, 12).join(', ') || '—'}.`
-        : `${modeNote} ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, ca ${formatKm(totalKm)}):\n${lines.join('\n')}`,
+    summary,
     matches: useHits.map((g) => ({
       gameId: g.gameId,
       date: g.date,
@@ -653,11 +648,13 @@ export async function toolAlongRoute(
       totalKm,
       totalDriveMinutes: totalDrive,
       corridorKm,
-      chained: chain.length >= 2,
+      chained: false,
+      exampleChain: chain.map((h) => h.gameId),
       candidates: hits.length,
       mapped: mapped.length,
       watchMinutes: watch,
       towns: townHints.slice(0, 20),
+      alternatives: true,
     },
   }
 }
@@ -671,29 +668,47 @@ type AlongHit = ScoutMatch &
     progress: number
   }
 
-/** Pick up to N matches from different segments of the drive (avoids all-Stockholm). */
-function spreadAlongRoute(hits: AlongHit[], totalKm: number, limit: number): AlongHit[] {
+/**
+ * Menu of reachable stops along the drive for the user to choose from.
+ * Spreads across route segments, then fills with remaining candidates.
+ */
+function pickAlongAlternatives(hits: AlongHit[], totalKm: number, limit: number): AlongHit[] {
   if (hits.length === 0 || totalKm <= 0) return []
-  const buckets = 5
+  const buckets = 6
   const byBucket: AlongHit[][] = Array.from({ length: buckets }, () => [])
   for (const h of hits) {
     const b = Math.min(buckets - 1, Math.floor(h.progress * buckets))
     byBucket[b]!.push(h)
   }
+  // Prefer earlier kickoff within each bucket (more flexible stop)
+  for (const list of byBucket) {
+    list.sort((a, b) => a.date.localeCompare(b.date) || a.corridorKm - b.corridorKm)
+  }
+
   const picked: AlongHit[] = []
   const seen = new Set<number>()
-  // Round-robin across buckets so mid/south route gets slots
-  for (let round = 0; round < 3 && picked.length < limit; round++) {
+  const perBucketCap = 3
+
+  for (let round = 0; round < perBucketCap && picked.length < limit; round++) {
     for (let b = 0; b < buckets && picked.length < limit; b++) {
       const list = byBucket[b]!
       const next = list.find((h) => !seen.has(h.gameId))
       if (!next) continue
-      // Prefer not stacking many in first 15% when later buckets exist
-      if (b === 0 && round > 0 && byBucket.slice(1).some((x) => x.length > 0)) continue
       seen.add(next.gameId)
       picked.push(next)
     }
   }
+
+  // Fill remaining slots from leftover hits along the route
+  if (picked.length < limit) {
+    for (const h of hits) {
+      if (picked.length >= limit) break
+      if (seen.has(h.gameId)) continue
+      seen.add(h.gameId)
+      picked.push(h)
+    }
+  }
+
   return picked.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
 }
 
