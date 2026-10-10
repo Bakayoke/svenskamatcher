@@ -242,6 +242,7 @@ export type LastAskSession = {
   tab: 'ask' | 'route' | 'along'
   alongFrom?: string
   alongTo?: string
+  alongDay?: string
   alongTime?: string
   canA?: string
   canB?: string

@@ -276,6 +276,12 @@ export default function App() {
   })
   const [alongFrom, setAlongFrom] = useState(() => loadLastAsk()?.alongFrom ?? 'Uppsala')
   const [alongTo, setAlongTo] = useState(() => loadLastAsk()?.alongTo ?? 'Malmö')
+  const [alongDay, setAlongDay] = useState(() => {
+    const saved = loadLastAsk()?.alongDay
+    const today = toDateParam(new Date())
+    if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) && saved >= today) return saved
+    return today
+  })
   const [alongTime, setAlongTime] = useState(() => loadLastAsk()?.alongTime ?? '08:00')
   const [alongBusy, setAlongBusy] = useState(false)
   const [alongError, setAlongError] = useState<string | null>(null)
@@ -658,6 +664,7 @@ export default function App() {
       tab: partial.tab ?? assistantTab,
       alongFrom,
       alongTo,
+      alongDay,
       alongTime,
       canA,
       canB,
@@ -696,12 +703,13 @@ export default function App() {
     setAssistantTab('along')
     setShowChat(true)
     try {
+      const day = alongDay || toDateParam(new Date())
       const result = await alongRouteApi({
         fromPlace: alongFrom,
         toPlace: alongTo,
         departTime: alongTime,
-        day: fromIso,
-        context: scoutAskContext,
+        day,
+        context: { ...scoutAskContext, from: day, to: day },
       })
       const mapped: ScoutAskResult = {
         answer: result.summary,
@@ -1939,7 +1947,8 @@ export default function App() {
               {assistantTab === 'along' && (
                 <>
                   <p className="cluster-lede">
-                    Hitta matcher längs en bilresa. Välj själv vilka du stannar för.
+                    Hitta matcher längs en bilresa. Välj avrese-datum och tid — dagens datum är
+                    förvalt.
                   </p>
                   <div className="base-row along-inputs">
                     <input
@@ -1956,16 +1965,25 @@ export default function App() {
                       placeholder="Till"
                       onChange={(e) => setAlongTo(e.target.value)}
                     />
+                  </div>
+                  <div className="base-row along-inputs">
+                    <input
+                      type="date"
+                      value={alongDay}
+                      aria-label="Avresedatum"
+                      min={toDateParam(new Date())}
+                      onChange={(e) => setAlongDay(e.target.value)}
+                    />
                     <input
                       type="time"
                       value={alongTime}
-                      aria-label="Avresa"
+                      aria-label="Avresetid"
                       onChange={(e) => setAlongTime(e.target.value)}
                     />
                     <button
                       type="button"
                       className="chip active"
-                      disabled={alongBusy || !alongFrom.trim() || !alongTo.trim()}
+                      disabled={alongBusy || !alongFrom.trim() || !alongTo.trim() || !alongDay}
                       onClick={() => void submitAlongRoute()}
                     >
                       {alongBusy ? 'Söker…' : 'Sök'}
