@@ -21,6 +21,11 @@ export function estimateDriveMinutes(
   return Math.max(1, Math.ceil(((km * roadFactor) / speedKmh) * 60))
 }
 
+/** Longer E4/E6-style legs – used for along-route ETA so south stays reachable. */
+export function estimateHighwayMinutes(km: number): number {
+  return estimateDriveMinutes(km, 90, 1.2)
+}
+
 /** Distance from point to segment AB, and progress along AB (0–1, may be outside). */
 export function distanceToSegmentKm(
   p: LatLon,

@@ -5,6 +5,7 @@ import {
   clockFromMs,
   distanceToSegmentKm,
   estimateDriveMinutes,
+  estimateHighwayMinutes,
   formatDrive,
   formatKm,
   haversineKm,
@@ -38,12 +39,12 @@ export type ScoutContext = {
   query?: string
 }
 
-const MAX_GEOCODE = 36
+const MAX_GEOCODE = 40
 const DEFAULT_WATCH = 75
 const ARRIVE_BUFFER = 15
-const CORRIDOR_KM = 95
+const CORRIDOR_KM = 110
 /** How long you may wait at a stop after earliest arrival before kickoff. */
-const MAX_WAIT_AFTER_ETA_H = 12
+const MAX_WAIT_AFTER_ETA_H = 14
 
 function isoToday() {
   const d = new Date()
@@ -140,9 +141,60 @@ function attachCoords(
   const out: Array<ScoutMatch & LatLon> = []
   for (const g of games) {
     const p = geo[g.location.toLowerCase()]
-    if (!p) continue
-    out.push({ ...g, lat: p.lat, lon: p.lon })
+    if (p) {
+      out.push({ ...g, lat: p.lat, lon: p.lon })
+      continue
+    }
+    // Instant approx from city name in venue string (covers south without Nominatim queue)
+    const approx = lookupSwedishPlace(g.location)
+    if (approx) out.push({ ...g, lat: approx.lat, lon: approx.lon })
   }
+  return out
+}
+
+/** Stratify venue strings so mid/south corridor towns get geocode slots, not only Stockholm. */
+function locationsStratifiedAlongRoute(
+  games: ScoutMatch[],
+  alongTowns: Array<{ name: string; t: number }>,
+  limit: number,
+): string[] {
+  const buckets = 6
+  const byBucket: string[][] = Array.from({ length: buckets }, () => [])
+  const unmatched: string[] = []
+
+  for (const g of games) {
+    const loc = g.location.trim()
+    if (!loc) continue
+    const lower = loc.toLowerCase()
+    const town = alongTowns.find((t) => t.name.length >= 4 && lower.includes(t.name))
+    if (town) {
+      const b = Math.min(buckets - 1, Math.floor(Math.max(0, Math.min(1, town.t)) * buckets))
+      byBucket[b]!.push(loc)
+    } else {
+      unmatched.push(loc)
+    }
+  }
+
+  const out: string[] = []
+  const seen = new Set<string>()
+  const take = (list: string[]) => {
+    for (const loc of list) {
+      if (out.length >= limit) return
+      const key = loc.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(loc)
+    }
+  }
+
+  // Round-robin across route buckets first (north → south)
+  for (let round = 0; round < 8 && out.length < limit; round++) {
+    for (let b = 0; b < buckets && out.length < limit; b++) {
+      const loc = byBucket[b]![round]
+      if (loc) take([loc])
+    }
+  }
+  take(unmatched)
   return out
 }
 
@@ -549,22 +601,21 @@ export async function toolAlongRoute(
 
   const alongTowns = townsAlongDrive(fromP, toP, corridorKm)
   const townHints = alongTowns.map((t) => t.name)
-  // Prefer venues that mention towns on the corridor (avoids geocoding only Stockholm noise)
-  const preferred = games.filter((g) => {
-    const loc = g.location.toLowerCase()
-    return townHints.some((t) => t.length >= 4 && loc.includes(t))
-  })
-  const pool = preferred.length >= 8 ? preferred : games
-  const geo = await geocodeMany(pool.map((g) => g.location), MAX_GEOCODE, [
+  // Geocode a stratified sample (north→south). City-name approx covers the rest instantly.
+  const toGeocode = locationsStratifiedAlongRoute(games, alongTowns, MAX_GEOCODE)
+  const geo = await geocodeMany(toGeocode, MAX_GEOCODE, [
     args.fromPlace,
     args.toPlace,
     ...townHints,
   ])
-  const mapped = attachCoords(pool, geo)
+  // Attach coords for ALL games (static city approx + geocode hits) so south is not dropped
+  const mapped = attachCoords(games, geo)
   const depart = localDateTime(day, args.departTime ?? '08:00').getTime()
   const totalKm = haversineKm(fromP, toP)
-  const totalDrive = estimateDriveMinutes(totalKm)
-  const maxWait = MAX_WAIT_AFTER_ETA_H * 60
+  const totalDrive = estimateHighwayMinutes(totalKm)
+  // Longer drives: allow waiting for evening kickoffs after you arrive mid-afternoon
+  const maxWait =
+    totalKm > 250 ? Math.max(MAX_WAIT_AFTER_ETA_H, 16) * 60 : MAX_WAIT_AFTER_ETA_H * 60
   const watch = args.watchMinutes ?? DEFAULT_WATCH
 
   type Hit = ScoutMatch &
@@ -579,14 +630,15 @@ export async function toolAlongRoute(
   const hits: Hit[] = []
   for (const g of mapped) {
     const seg = distanceToSegmentKm(g, fromP, toP)
-    const nearStart = haversineKm(fromP, g) <= Math.min(40, corridorKm)
-    const nearEnd = haversineKm(toP, g) <= Math.min(40, corridorKm)
+    const nearStart = haversineKm(fromP, g) <= Math.min(45, corridorKm)
+    const nearEnd = haversineKm(toP, g) <= Math.min(50, corridorKm)
     const onCorridor = seg.km <= corridorKm && seg.t >= -0.02 && seg.t <= 1.02
     if (!onCorridor && !nearStart && !nearEnd) continue
 
     const t = onCorridor ? Math.max(0, Math.min(1, seg.t)) : nearStart ? 0 : 1
     const kmAlong = t * totalKm
-    const etaMs = depart + estimateDriveMinutes(kmAlong) * 60000
+    // Highway ETA so Linköping→Malmö stays reachable from an early start
+    const etaMs = depart + estimateHighwayMinutes(kmAlong) * 60000
     const kickoff = parseKickoff(g.date).getTime()
     const need = kickoff - ARRIVE_BUFFER * 60000
     const slack = Math.round((need - etaMs) / 60000)
@@ -605,7 +657,7 @@ export async function toolAlongRoute(
   hits.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
 
   // Alternatives first: many reachable stops to choose from (not a "do all" itinerary)
-  const useHits = pickAlongAlternatives(hits, totalKm, 12)
+  const useHits = pickAlongAlternatives(hits, totalKm, 16)
   const chain = optimizeAlongRoute(hits, watch, totalKm)
 
   const lines = useHits.map(
@@ -687,19 +739,26 @@ function pickAlongAlternatives(hits: AlongHit[], totalKm: number, limit: number)
 
   const picked: AlongHit[] = []
   const seen = new Set<number>()
-  const perBucketCap = 3
+  // Guarantee southern buckets get slots even if the north is dense
+  const perBucketCap = 4
 
   for (let round = 0; round < perBucketCap && picked.length < limit; round++) {
-    for (let b = 0; b < buckets && picked.length < limit; b++) {
-      const list = byBucket[b]!
-      const next = list.find((h) => !seen.has(h.gameId))
+    // South-biased order on later rounds: 5,4,3,2,1,0 then normal
+    const order =
+      round === 0
+        ? [0, 1, 2, 3, 4, 5]
+        : round === 1
+          ? [5, 4, 3, 2, 1, 0]
+          : [2, 3, 4, 5, 1, 0]
+    for (const b of order) {
+      if (picked.length >= limit) break
+      const next = byBucket[b]!.find((h) => !seen.has(h.gameId))
       if (!next) continue
       seen.add(next.gameId)
       picked.push(next)
     }
   }
 
-  // Fill remaining slots from leftover hits along the route
   if (picked.length < limit) {
     for (const h of hits) {
       if (picked.length >= limit) break
