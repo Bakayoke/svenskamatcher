@@ -1,6 +1,6 @@
 import { addDays, format, isSameDay } from 'date-fns'
 import { sv } from 'date-fns/locale'
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { DayPicker, type DateRange } from 'react-day-picker'
 import { sv as dayPickerSv } from 'react-day-picker/locale'
 import 'react-day-picker/style.css'
@@ -11,10 +11,10 @@ import {
   isOnboardingDone,
   isTomorrowBannerDismissed,
   loadBasePlace,
+  loadLastAsk,
   loadLastScouted,
   loadLastSession,
   loadNotes,
-  loadParentMode,
   loadSavedViews,
   loadShortlist,
   loadWatchTeams,
@@ -22,9 +22,9 @@ import {
   pushLastScouted,
   removeSavedView,
   saveBasePlace,
+  saveLastAsk,
   saveLastSession,
   saveNote,
-  saveParentMode,
   saveShortlist,
   toggleShortlist,
   toggleWatchTeam,
@@ -37,7 +37,7 @@ import {
 import { decodeShortlist, mergeShortlists, shortlistShareUrl } from './shareShortlist'
 import { fetchMatches } from './api'
 import { buildClusters } from './clusters'
-import { DISTRICT_NAMES, districtName } from './districts'
+import { districtName } from './districts'
 import { downloadShortlistCsv, downloadShortlistJson } from './exportScout'
 import {
   countGames,
@@ -68,12 +68,12 @@ import {
   type FocusMode,
 } from './time'
 import { parseDateParam, readUrlState, toDateParam, writeUrlState } from './urlState'
-import { bootFromPathname, isoDay, navigateSeo } from './pathState'
-import { YOUTH_AGE_CHIPS, teamPath } from './seoRoutes'
+import { bootFromPathname, navigateSeo } from './pathState'
+import { YOUTH_AGE_CHIPS } from './seoRoutes'
 import {
-  ASK_EXAMPLES,
   alongRouteApi,
   askScoutApi,
+  buildAskExamples,
   type ScoutAskMatch,
   type ScoutAskResult,
 } from './aiScoutApi'
@@ -243,21 +243,48 @@ export default function App() {
     () => !isOnboardingDone() && loadWatchTeams().length < 2,
   )
   const install = useInstallPrompt()
-  const [parentMode, setParentMode] = useState(() => loadParentMode())
   const [lastScouted, setLastScouted] = useState<LastScouted[]>(() => loadLastScouted())
   const [showTravel, setShowTravel] = useState(false)
-  const [showDayRoute, setShowDayRoute] = useState(false)
-  const [showAsk, setShowAsk] = useState(false)
-  const [askDraft, setAskDraft] = useState('')
+  const [showChat, setShowChat] = useState(false)
+  const [assistantTab, setAssistantTab] = useState<'ask' | 'route' | 'along'>(
+    () => loadLastAsk()?.tab ?? 'ask',
+  )
+  const [askDraft, setAskDraft] = useState(() => loadLastAsk()?.draft ?? '')
   const [askBusy, setAskBusy] = useState(false)
   const [askError, setAskError] = useState<string | null>(null)
-  const [askResult, setAskResult] = useState<ScoutAskResult | null>(null)
-  const [alongFrom, setAlongFrom] = useState('Uppsala')
-  const [alongTo, setAlongTo] = useState('Malmö')
-  const [alongTime, setAlongTime] = useState('08:00')
+  const [askResult, setAskResult] = useState<ScoutAskResult | null>(() => {
+    const boot = loadLastAsk()
+    if (!boot?.answer) return null
+    return {
+      answer: boot.answer,
+      matches: (boot.matches ?? []).map((m) => ({
+        gameId: m.gameId,
+        date: m.date,
+        home: m.home,
+        away: m.away,
+        competitionName: m.competitionName,
+        location: m.location,
+        url: m.url,
+        lat: m.lat,
+        lon: m.lon,
+        genderName: m.genderName ?? '',
+        ageCategoryName: m.ageCategoryName ?? '',
+      })),
+      toolsUsed: [],
+      mode: 'rules',
+    }
+  })
+  const [alongFrom, setAlongFrom] = useState(() => loadLastAsk()?.alongFrom ?? 'Uppsala')
+  const [alongTo, setAlongTo] = useState(() => loadLastAsk()?.alongTo ?? 'Malmö')
+  const [alongTime, setAlongTime] = useState(() => loadLastAsk()?.alongTime ?? '08:00')
   const [alongBusy, setAlongBusy] = useState(false)
-  const [watchMinutes, setWatchMinutes] = useState(60)
+  const [alongError, setAlongError] = useState<string | null>(null)
+  const [alongResult, setAlongResult] = useState<ScoutAskResult | null>(null)
+  const [canA, setCanA] = useState(() => loadLastAsk()?.canA ?? '')
+  const [canB, setCanB] = useState(() => loadLastAsk()?.canB ?? '')
+  const [watchMinutes, setWatchMinutes] = useState(75)
   const [youthChip, setYouthChip] = useState<string | null>(null)
+  const askInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     document.getElementById('seo-content')?.setAttribute('hidden', '')
@@ -282,14 +309,14 @@ export default function App() {
     if (!boot.sharedLista) return
     const decoded = decodeShortlist(boot.sharedLista)
     if (!decoded?.length) {
-      setImportNotice('Kunde inte läsa den delade scoutlistan.')
+      setImportNotice('Kunde inte läsa den delade listan.')
       return
     }
     const merged = mergeShortlists(loadShortlist(), decoded)
     saveShortlist(merged)
     setShortlist(merged)
     setShowShortlistOnly(true)
-    setImportNotice(`Importerade ${decoded.length} matcher från delad scoutlista.`)
+    setImportNotice(`Importerade ${decoded.length} matcher till Mina matcher.`)
   }, [boot.sharedLista])
 
   useEffect(() => {
@@ -495,20 +522,6 @@ export default function App() {
       .sort((a, b) => a.name.localeCompare(b.name, 'sv'))
   }, [data])
 
-  const popularTeams = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const g of flat) {
-      for (const n of [g.homeTeam.name.trim(), g.awayTeam.name.trim()]) {
-        if (!n) continue
-        counts.set(n, (counts.get(n) ?? 0) + 1)
-      }
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'sv'))
-      .slice(0, 12)
-      .map(([name]) => name)
-  }, [flat])
-
   const travelStops = useMemo(() => {
     if (!showTravel || shortlist.length === 0) return []
     return buildTravelPlan(shortlist, geoCache)
@@ -532,14 +545,14 @@ export default function App() {
   )
 
   const dayRoute = useMemo(() => {
-    if (!showDayRoute) return null
+    if (!showChat || assistantTab !== 'route') return null
     const coords = new Map<number, { lat: number; lon: number }>()
     for (const g of focused) {
       const m = venueMeta.get(g.gameId)
       if (m) coords.set(g.gameId, { lat: m.lat, lon: m.lon })
     }
     return optimizeDayRoute(focused, coords, basePlace, dayRouteOpts)
-  }, [showDayRoute, focused, venueMeta, basePlace, dayRouteOpts])
+  }, [showChat, assistantTab, focused, venueMeta, basePlace, dayRouteOpts])
 
   const dayRouteMapsUrl = useMemo(() => {
     if (!dayRoute || dayRoute.stops.length === 0) return null
@@ -607,15 +620,62 @@ export default function App() {
     setShowShortlistOnly(true)
   }
 
+  const askExamples = useMemo(
+    () =>
+      buildAskExamples({
+        baseQuery: basePlace?.query,
+        watchTeams,
+        shortlistCount: shortlist.length,
+      }),
+    [basePlace?.query, watchTeams, shortlist.length],
+  )
+
+  function enrichAskMessage(text: string) {
+    const bits: string[] = []
+    if (watchTeams.length > 0) bits.push(`Bevakade lag: ${watchTeams.join(', ')}`)
+    if (shortlist.length > 0) {
+      bits.push(
+        `Sparade matcher: ${shortlist
+          .slice(0, 10)
+          .map((m) => `${m.home}–${m.away} ${m.date.slice(11, 16)}`)
+          .join('; ')}`,
+      )
+    }
+    if (bits.length === 0) return text
+    return `${text}\n\n(Kontext från sidan: ${bits.join('. ')})`
+  }
+
+  function persistAskSession(partial: {
+    draft?: string
+    answer?: string | null
+    matches?: ScoutAskMatch[]
+    tab?: 'ask' | 'route' | 'along'
+  }) {
+    saveLastAsk({
+      draft: partial.draft ?? askDraft,
+      answer: partial.answer !== undefined ? partial.answer : (askResult?.answer ?? null),
+      matches: partial.matches ?? askResult?.matches,
+      tab: partial.tab ?? assistantTab,
+      alongFrom,
+      alongTo,
+      alongTime,
+      canA,
+      canB,
+    })
+  }
+
   async function submitAsk(message?: string) {
     const text = (message ?? askDraft).trim()
     if (!text) return
     setAskDraft(text)
+    setAssistantTab('ask')
+    setShowChat(true)
     setAskBusy(true)
     setAskError(null)
     try {
-      const result = await askScoutApi(text, scoutAskContext)
+      const result = await askScoutApi(enrichAskMessage(text), scoutAskContext)
       setAskResult(result)
+      persistAskSession({ draft: text, answer: result.answer, matches: result.matches, tab: 'ask' })
     } catch (err) {
       setAskError(err instanceof Error ? err.message : 'Kunde inte fråga')
     } finally {
@@ -623,9 +683,18 @@ export default function App() {
     }
   }
 
+  async function submitCanMake() {
+    const a = canA.trim()
+    const b = canB.trim()
+    if (!a || !b) return
+    await submitAsk(`Hinner jag se ${a} och sedan ${b}?`)
+  }
+
   async function submitAlongRoute() {
     setAlongBusy(true)
-    setAskError(null)
+    setAlongError(null)
+    setAssistantTab('along')
+    setShowChat(true)
     try {
       const result = await alongRouteApi({
         fromPlace: alongFrom,
@@ -634,15 +703,16 @@ export default function App() {
         day: fromIso,
         context: scoutAskContext,
       })
-      setAskResult({
+      const mapped: ScoutAskResult = {
         answer: result.summary,
         matches: result.matches,
         toolsUsed: ['matches_along_route'],
         mode: 'rules',
-      })
-      setShowAsk(true)
+      }
+      setAlongResult(mapped)
+      persistAskSession({ tab: 'along' })
     } catch (err) {
-      setAskError(err instanceof Error ? err.message : 'Kunde inte söka längs vägen')
+      setAlongError(err instanceof Error ? err.message : 'Kunde inte söka längs vägen')
     } finally {
       setAlongBusy(false)
     }
@@ -680,8 +750,7 @@ export default function App() {
     setRange({ from: today, to: today })
     setFocus('overview')
     setTeamFocus(null)
-    if (watchTeams.length > 0 && !parentMode) setPreset('watch')
-    if (parentMode && watchTeams.length > 0) setPreset('watch')
+    if (watchTeams.length > 0) setPreset('watch')
     setCalendarOpen(false)
   }
 
@@ -855,14 +924,77 @@ export default function App() {
     }
   }, [watchTeams.length, showOnboarding])
 
+  useEffect(() => {
+    if (!showChat) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowChat(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showChat])
+
+  useEffect(() => {
+    if (!showChat || assistantTab !== 'ask') return
+    askInputRef.current?.focus()
+  }, [showChat, assistantTab])
+
+  function renderAskMatches(result: ScoutAskResult) {
+    return (
+      <div className="ask-result">
+        <p className="ask-answer">{result.answer}</p>
+        {result.matches.length > 0 && (
+          <>
+            <ul className="ask-match-list">
+              {result.matches.map((m) => (
+                <li key={m.gameId}>
+                  <strong>
+                    {m.date.slice(0, 10)} {m.date.slice(11, 16)}
+                  </strong>{' '}
+                  {m.home} – {m.away}
+                  <br />
+                  <span>
+                    {m.location} · {m.competitionName}
+                  </span>
+                  <br />
+                  <span className="foot-links">
+                    {m.lat != null && m.lon != null && (
+                      <a
+                        className="maps-link"
+                        href={mapsPlaceUrl({ lat: m.lat, lon: m.lon })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Maps
+                      </a>
+                    )}
+                    <a href={matchUrl(m.url)} target="_blank" rel="noreferrer">
+                      Detaljer
+                    </a>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="return-actions">
+              <button
+                type="button"
+                className="chip active"
+                onClick={() => addAskMatchesToShortlist(result.matches)}
+              >
+                Lägg i mina matcher
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="page app-shell">
       <header className="hero">
-        <p className="eyebrow">Scout · Agenter · Sverige</p>
+        <p className="eyebrow">Svensk fotboll</p>
         <h1 className="brand">Svenska Matcher</h1>
-        <p className="lede">
-          Hitta matcher att scouta, spara lag och bygg en resa — utan brus.
-        </p>
+        <p className="lede">Välj datum, hitta matcher — fråga assistenten nere till höger.</p>
       </header>
 
       {showTomorrowBanner && tomorrowWatchCount != null && tomorrowWatchCount > 0 && (
@@ -948,7 +1080,7 @@ export default function App() {
         </div>
       )}
 
-      <section className="quickbar panel" aria-label="Scoutverktyg">
+      <section className="quickbar panel" aria-label="Hitta matcher">
         <div className="quick-dates" role="group" aria-label="Datum">
           <button type="button" className={`chip ${viewingToday ? 'active' : ''}`} onClick={goToday}>
             Idag
@@ -966,36 +1098,30 @@ export default function App() {
             onClick={() => setCalendarOpen((o) => !o)}
             aria-expanded={calendarOpen}
           >
-            Byt datum
-          </button>
-          <button type="button" className="chip" onClick={copyShareLink}>
-            {copied ? 'Länk kopierad' : 'Dela vy'}
-          </button>
-          <button
-            type="button"
-            className={`chip ${parentMode ? 'active' : ''}`}
-            title="Färre filter – fokuserar på dina lag och döljer scout-/ålderssnabbval"
-            onClick={() => {
-              const next = !parentMode
-              setParentMode(next)
-              saveParentMode(next)
-              if (next && watchTeams.length > 0) setPreset('watch')
-            }}
-          >
-            Förenklad
+            Annat datum
           </button>
         </div>
 
         {!showShortlistOnly && (
           <>
-            <div className="focus-row" role="group" aria-label="Kategori">
+            <label className="field compact search-primary">
+              <span className="sr-only">Sök lag, arena eller liga</span>
+              <input
+                type="search"
+                placeholder="Sök lag, arena eller liga…"
+                value={filters.query}
+                onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
+              />
+            </label>
+
+            <div className="focus-row" role="group" aria-label="Visa">
               {(
                 [
                   ['all', 'Alla'],
                   ['elit', 'Elit'],
                   ['ungdom', 'Ungdom'],
                   ['dam', 'Dam'],
-                  ['watch', `Mina lag (${watchTeams.length})`],
+                  ['watch', watchTeams.length > 0 ? `Mina lag (${watchTeams.length})` : 'Mina lag'],
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -1009,26 +1135,20 @@ export default function App() {
               ))}
             </div>
 
-            <div className="focus-row" role="group" aria-label="Tid">
-              {(
-                [
-                  ['overview', 'Kommande', phases.live + phases.soon + phases.later],
-                  ['live', 'Pågår', phases.live],
-                  ['results', 'Resultat', phases.done],
-                  ['all', 'Alla', scouted.length],
-                ] as const
-              ).map(([key, label, count]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`chip focus-chip ${focus === key ? 'active' : ''} ${key === 'live' && phases.live > 0 ? 'has-live' : ''}`}
-                  onClick={() => setFocus(key)}
-                >
-                  {label}
-                  <span className="count">{count}</span>
-                </button>
-              ))}
-            </div>
+            {preset === 'ungdom' && (
+              <div className="chip-row tight" role="group" aria-label="Åldersnivå">
+                {YOUTH_AGE_CHIPS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={`chip ${youthChip === tag ? 'active' : ''}`}
+                    onClick={() => setYouthChip((c) => (c === tag ? null : tag))}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         )}
 
@@ -1036,42 +1156,10 @@ export default function App() {
           <button
             type="button"
             className={`chip ${showShortlistOnly ? 'active' : ''}`}
-            title="Sparade matcher att scouta – oberoende av datumfilter"
-            onClick={() => {
-              setShowShortlistOnly((v) => !v)
-              setShowAsk(false)
-              setShowDayRoute(false)
-            }}
+            title="Sparade matcher"
+            onClick={() => setShowShortlistOnly((v) => !v)}
           >
-            Scoutlista{shortlist.length > 0 ? ` (${shortlist.length})` : ''}
-          </button>
-          <button
-            type="button"
-            className={`chip ${showAsk ? 'active' : ''}`}
-            onClick={() => {
-              setShowAsk((v) => !v)
-              if (!showAsk) {
-                setShowDayRoute(false)
-                setShowShortlistOnly(false)
-              }
-            }}
-            title="Fråga om matcher, dagsrutt eller resa"
-          >
-            Fråga
-          </button>
-          <button
-            type="button"
-            className={`chip ${showDayRoute ? 'active' : ''}`}
-            onClick={() => {
-              setShowDayRoute((v) => !v)
-              if (!showDayRoute) {
-                setShowAsk(false)
-                setShowShortlistOnly(false)
-              }
-            }}
-            title="Hitta vilka matcher du hinner se samma dag"
-          >
-            Hinner jag?
+            Mina matcher{shortlist.length > 0 ? ` (${shortlist.length})` : ''}
           </button>
         </div>
 
@@ -1079,13 +1167,13 @@ export default function App() {
           <div className="shortlist-toolbar no-print">
             <p className="cluster-lede">
               {shortlist.length === 0
-                ? 'Inga sparade matcher ännu. Tryck “+ Lista” på en match för att lägga till.'
-                : `${shortlist.length} sparade matcher (visas även om de ligger utanför valt datum).`}
+                ? 'Tomt än. Öppna en match och tryck “+ Spara”.'
+                : `${shortlist.length} sparade matcher.`}
             </p>
             {shortlist.length > 0 && (
               <div className="chip-row tight">
                 <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
-                  {listaCopied ? 'Listlänk kopierad' : 'Dela lista'}
+                  {listaCopied ? 'Länk kopierad' : 'Dela'}
                 </button>
                 <button
                   type="button"
@@ -1112,7 +1200,7 @@ export default function App() {
                   </div>
                 </details>
                 <button type="button" className="chip" onClick={() => setShowShortlistOnly(false)}>
-                  Tillbaka till matcher
+                  Tillbaka
                 </button>
               </div>
             )}
@@ -1121,230 +1209,9 @@ export default function App() {
 
         {shortlistConflicts.length > 0 && showShortlistOnly && (
           <p className="hint warn">
-            Tidskonflikt i scoutlistan: {shortlistConflicts.length} kickoff-tider har flera matcher.
-            {showTravel ? '' : ' Öppna Resplan för översikt.'}
+            Tidskonflikt: {shortlistConflicts.length} kickoff-tider har flera matcher.
+            {showTravel ? '' : ' Öppna Resplan.'}
           </p>
-        )}
-
-        {showAsk && (
-          <section className="travel-plan ask-panel panel no-print" aria-label="Fråga">
-            <h3>Fråga</h3>
-            <p className="cluster-lede">
-              Assistenten svarar bara utifrån matcher på sidan — sök, dagsrutt och bilresa. Använder
-              valt datum{basePlace ? ` och basort ${basePlace.query}` : ''}.
-            </p>
-            <div className="ask-examples">
-              {ASK_EXAMPLES.map((ex) => (
-                <button
-                  key={ex}
-                  type="button"
-                  className="chip"
-                  disabled={askBusy}
-                  onClick={() => void submitAsk(ex)}
-                >
-                  {ex.length > 64 ? `${ex.slice(0, 62)}…` : ex}
-                </button>
-              ))}
-            </div>
-            <label className="field">
-              <span>Din fråga</span>
-              <div className="base-row">
-                <input
-                  type="text"
-                  value={askDraft}
-                  placeholder="T.ex. matcher längs vägen Uppsala–Malmö från 08:00"
-                  disabled={askBusy}
-                  onChange={(e) => setAskDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      void submitAsk()
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="chip active"
-                  disabled={askBusy || !askDraft.trim()}
-                  onClick={() => void submitAsk()}
-                >
-                  {askBusy ? 'Söker…' : 'Fråga'}
-                </button>
-              </div>
-            </label>
-
-            <div className="along-form">
-              <p className="cluster-lede" style={{ marginBottom: '0.35rem' }}>
-                Eller: matcher längs bilresa
-              </p>
-              <div className="base-row">
-                <input
-                  type="text"
-                  value={alongFrom}
-                  aria-label="Från"
-                  placeholder="Från"
-                  onChange={(e) => setAlongFrom(e.target.value)}
-                />
-                <input
-                  type="text"
-                  value={alongTo}
-                  aria-label="Till"
-                  placeholder="Till"
-                  onChange={(e) => setAlongTo(e.target.value)}
-                />
-                <input
-                  type="time"
-                  value={alongTime}
-                  aria-label="Avresa"
-                  onChange={(e) => setAlongTime(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={alongBusy || !alongFrom.trim() || !alongTo.trim()}
-                  onClick={() => void submitAlongRoute()}
-                >
-                  {alongBusy ? 'Söker…' : 'Längs vägen'}
-                </button>
-              </div>
-            </div>
-
-            {askError && <p className="hint warn">{askError}</p>}
-            {askResult && (
-              <div className="ask-result">
-                <p className="ask-answer">{askResult.answer}</p>
-                {askResult.matches.length > 0 && (
-                  <>
-                    <ul className="ask-match-list">
-                      {askResult.matches.map((m) => (
-                        <li key={m.gameId}>
-                          <strong>
-                            {m.date.slice(0, 10)} {m.date.slice(11, 16)}
-                          </strong>{' '}
-                          {m.home} – {m.away}
-                          <br />
-                          <span>
-                            {m.location} · {m.competitionName}
-                          </span>
-                          <br />
-                          <span className="foot-links">
-                            {m.lat != null && m.lon != null && (
-                              <a
-                                className="maps-link"
-                                href={mapsPlaceUrl({ lat: m.lat, lon: m.lon })}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Maps
-                              </a>
-                            )}
-                            <a href={matchUrl(m.url)} target="_blank" rel="noreferrer">
-                              Detaljer
-                            </a>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="return-actions">
-                      <button
-                        type="button"
-                        className="chip active"
-                        onClick={() => addAskMatchesToShortlist(askResult.matches)}
-                      >
-                        Lägg i scoutlista
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        {showDayRoute && (
-          <section className="travel-plan day-route panel no-print" aria-label="Dagsrutt">
-            <h3>Hinner jag?</h3>
-            <p className="cluster-lede">
-              Optimal rutt bland synliga matcher
-              {basePlace ? ` från ${basePlace.query}` : ' (sätt basort för bättre start)'}
-              . Uppskattad bilväg · {watchMinutes} min på plats per match.
-            </p>
-            <div className="chip-row tight" role="group" aria-label="Tid på plats">
-              {[45, 60, 90].map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`chip ${watchMinutes === m ? 'active' : ''}`}
-                  onClick={() => setWatchMinutes(m)}
-                >
-                  {m} min
-                </button>
-              ))}
-            </div>
-            {!basePlace && (
-              <p className="hint">Tips: ange basort under filter så räknas första sträckan in.</p>
-            )}
-            {dayRoute && dayRoute.stops.length === 0 && (
-              <p className="hint warn">
-                Ingen genomförbar rutt än.
-                {dayRoute.unmapped > 0
-                  ? ` ${dayRoute.unmapped} matcher saknar plats på kartan (vänta på geokodning eller begränsa urvalet).`
-                  : ' Prova färre filter, kortare tid på plats, eller en närmare basort.'}
-              </p>
-            )}
-            {dayRoute && dayRoute.stops.length > 0 && (
-              <>
-                <p className="cluster-lede">
-                  {dayRoute.stops.length} matcher · {formatKm(dayRoute.totalKm)} ·{' '}
-                  {formatDrive(dayRoute.totalDriveMinutes)}
-                  {dayRoute.skipped > 0 ? ` · ${dayRoute.skipped} hoppades över` : ''}
-                  {dayRoute.unmapped > 0 ? ` · ${dayRoute.unmapped} utan karta` : ''}
-                </p>
-                <ol className="travel-list">
-                  {dayRoute.stops.map((stop, i) => (
-                    <li key={stop.game.gameId}>
-                      <strong>
-                        {kickoffClock(stop.game.date)}
-                        {i > 0
-                          ? ` · ankomst ca ${clockFromMs(stop.arriveAt)}`
-                          : ` · åk senast ${clockFromMs(stop.departAt)}`}
-                      </strong>{' '}
-                      {stop.game.homeTeam.name.trim()} – {stop.game.awayTeam.name.trim()}
-                      <br />
-                      <span>
-                        {stop.game.location}
-                        {stop.driveMinutesFromPrev > 0
-                          ? ` · ${formatKm(stop.kmFromPrev)} · ${formatDrive(stop.driveMinutesFromPrev)}`
-                          : i === 0 && basePlace
-                            ? ` · ${formatKm(stop.kmFromPrev)} från bas`
-                            : ''}
-                        {stop.slackMinutes > 0 ? ` · ${stop.slackMinutes} min marginal` : ''}
-                      </span>
-                      <br />
-                      <a
-                        className="maps-link"
-                        href={mapsPlaceUrl({ lat: stop.lat, lon: stop.lon })}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Visa i Maps
-                      </a>
-                    </li>
-                  ))}
-                </ol>
-                <div className="return-actions">
-                  {dayRouteMapsUrl && (
-                    <a className="chip active maps-chip" href={dayRouteMapsUrl} target="_blank" rel="noreferrer">
-                      Navigera hela rutten
-                    </a>
-                  )}
-                  <button type="button" className="chip" onClick={applyDayRouteToShortlist}>
-                    Lägg rutten i scoutlista
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
         )}
 
         {showTravel && shortlist.length > 0 && (
@@ -1395,64 +1262,43 @@ export default function App() {
           </section>
         )}
 
-        <div className="layout-row">
-          <div className="chip-row tight" role="group" aria-label="Kön">
-            {(['all', 'Man', 'Kvinna'] as const).map((g) => (
-              <button
-                key={g}
-                type="button"
-                className={`chip ${filters.gender === g ? 'active' : ''}`}
-                onClick={() => setFilters((f) => ({ ...f, gender: g }))}
-              >
-                {g === 'all' ? 'Alla' : g === 'Man' ? 'Herr' : 'Dam'}
-              </button>
-            ))}
-          </div>
-          <div className="chip-row tight" role="group" aria-label="Vy">
-            <button
-              type="button"
-              className={`chip ${layout === 'timeline' ? 'active' : ''}`}
-              onClick={() => setLayout('timeline')}
-            >
-              Tidslinje
-            </button>
-            <button
-              type="button"
-              className={`chip ${layout === 'league' ? 'active' : ''}`}
-              onClick={() => setLayout('league')}
-            >
-              Per liga
-            </button>
-          </div>
-        </div>
-
-        <label className="field compact">
-          <span className="sr-only">Sök lag, arena eller liga</span>
-          <input
-            type="search"
-            placeholder="Sök lag, arena eller liga…"
-            value={filters.query}
-            onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
-          />
-        </label>
-
-        {!parentMode && (
-          <div className="chip-row tight" role="group" aria-label="Åldersnivå i liganamn">
-            {YOUTH_AGE_CHIPS.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                className={`chip ${youthChip === tag ? 'active' : ''}`}
-                onClick={() => setYouthChip((c) => (c === tag ? null : tag))}
-              >
-                {tag}
-              </button>
-            ))}
-          </div>
-        )}
-
         <details className="more-filters">
-          <summary>Fler filter & distrikt</summary>
+          <summary>Mer filter</summary>
+          <div className="layout-row">
+            <div className="chip-row tight" role="group" aria-label="Kön">
+              {(['all', 'Man', 'Kvinna'] as const).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`chip ${filters.gender === g ? 'active' : ''}`}
+                  onClick={() => setFilters((f) => ({ ...f, gender: g }))}
+                >
+                  {g === 'all' ? 'Alla' : g === 'Man' ? 'Herr' : 'Dam'}
+                </button>
+              ))}
+            </div>
+            <div className="chip-row tight" role="group" aria-label="Vy">
+              <button
+                type="button"
+                className={`chip ${layout === 'timeline' ? 'active' : ''}`}
+                onClick={() => setLayout('timeline')}
+              >
+                Tidslinje
+              </button>
+              <button
+                type="button"
+                className={`chip ${layout === 'league' ? 'active' : ''}`}
+                onClick={() => setLayout('league')}
+              >
+                Per liga
+              </button>
+            </div>
+          </div>
+          <div className="chip-row tight">
+            <button type="button" className="chip" onClick={copyShareLink}>
+              {copied ? 'Länk kopierad' : 'Dela den här vyn'}
+            </button>
+          </div>
           <div className="chip-row" role="group" aria-label="Ålderskategori">
             <button
               type="button"
@@ -1729,91 +1575,6 @@ export default function App() {
           </div>
         )}
 
-        {!parentMode && lastScouted.length > 0 && (
-          <section className="discover panel no-print" aria-label="Senast scoutat">
-            <h3>Senast scoutat</h3>
-            <ul className="discover-links">
-              {lastScouted.slice(0, 6).map((s) => (
-                <li key={`${s.gameId}-${s.at}`}>
-                  <button
-                    type="button"
-                    className="chip"
-                    onClick={() => {
-                      const name = s.label.split('–')[0]?.trim()
-                      if (name) {
-                        setTeamFocus(name)
-                        navigateSeo('team', { team: name })
-                      }
-                    }}
-                  >
-                    {s.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        <section className="discover panel no-print" aria-label="Upptäck">
-          <h3>Upptäck</h3>
-          <p className="cluster-lede">Sidor Google kan indexera — lag, distrikt och datum.</p>
-          <div className="discover-grid">
-            <div>
-              <h4>Snabblänkar</h4>
-              <ul className="discover-links">
-                <li><a href="/idag" onClick={(e) => { e.preventDefault(); goToday() }}>Matcher idag</a></li>
-                <li><a href="/imorgon" onClick={(e) => { e.preventDefault(); goTomorrow() }}>Matcher imorgon</a></li>
-                <li><a href={`/matcher/${isoDay(now)}`}>Dagens URL</a></li>
-              </ul>
-            </div>
-            <div>
-              <h4>Populära lag</h4>
-              <ul className="discover-links">
-                {popularTeams.map((name) => (
-                  <li key={name}>
-                    <a
-                      href={teamPath(name)}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        setTeamFocus(name)
-                        setPreset('all')
-                        setShowShortlistOnly(false)
-                        navigateSeo('team', { team: name })
-                      }}
-                    >
-                      {name}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h4>Distrikt</h4>
-              <ul className="discover-links">
-                {Object.entries(DISTRICT_NAMES)
-                  .filter(([id]) => Number(id) > 1)
-                  .slice(0, 10)
-                  .map(([id, name]) => (
-                    <li key={id}>
-                      <a
-                        href={`/distrikt/${id}`}
-                        onClick={(e) => {
-                          e.preventDefault()
-                          const distId = Number(id)
-                          setFilters((f) => ({ ...f, districtId: distId }))
-                          setTeamFocus(null)
-                          navigateSeo('district', { districtId: distId })
-                        }}
-                      >
-                        {name}
-                      </a>
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          </div>
-        </section>
-
         {error && <p className="error-box">{error}</p>}
 
         {(teamFocus || clusterId) && (
@@ -1843,9 +1604,10 @@ export default function App() {
         )}
 
         {!loading && !error && !teamFocus && clusters.length > 0 && (
-          <section className="clusters panel no-print" aria-label="Kluster">
-            <h3>Kluster samma dag</h3>
-            <p className="cluster-lede">Flera matcher i samma distrikt eller på samma arena.</p>
+          <details className="clusters panel no-print" aria-label="Samma arena eller distrikt">
+            <summary>
+              Samma arena / distrikt ({clusters.length})
+            </summary>
             <ul className="cluster-list">
               {clusters.slice(0, 8).map((c) => (
                 <li key={c.id}>
@@ -1865,7 +1627,7 @@ export default function App() {
                 </li>
               ))}
             </ul>
-          </section>
+          </details>
         )}
 
         <div className="print-only print-plan">
@@ -1907,7 +1669,7 @@ export default function App() {
               {teamFocus
                 ? `Inga matcher för ${teamFocus} i valt intervall/filter.`
                 : showShortlistOnly
-                  ? 'Scoutlistan är tom. Lägg till matcher med “+ Lista”.'
+                  ? 'Inga sparade matcher än. Öppna en match och tryck “+ Spara”.'
                   : preset === 'watch'
                     ? watchTeams.length === 0
                       ? 'Inga bevakade lag ännu.'
@@ -1931,7 +1693,7 @@ export default function App() {
               )}
               {showShortlistOnly && (
                 <button type="button" className="chip" onClick={() => setShowShortlistOnly(false)}>
-                  Lämna scoutlistan
+                  Visa alla matcher
                 </button>
               )}
               {teamFocus && (
@@ -2043,14 +1805,313 @@ export default function App() {
         <h2 className="footer-title">Svenska fotbollsmatcher för scouting</h2>
         <p>
           Svenska Matcher hjälper dig att hitta matcher att scouta i Sverige — herr, dam och ungdom.
-          Filtrera på datum, distrikt och liga, fråga assistenten, planera vilka matcher du hinner se
-          (även längs en bilresa) och navigera dit via Google Maps.
+          Filtrera på datum, distrikt och liga. Använd Fråga-knappen för dagsrutt, bilresa och
+          om du hinner mellan matcher — navigera dit via Google Maps.
         </p>
         <p>
-          Spelarlistor och laguppställningar saknas i öppen data från svenskfotboll.se. Anteckningar,
-          bevakning och scoutlista sparas lokalt i din webbläsare (fungerar även som installerad app).
+          Anteckningar, bevakning och sparade matcher ligger lokalt i din webbläsare.
         </p>
       </footer>
+
+      <div className="chat-dock no-print">
+        {showChat && (
+          <section
+            className="chat-panel ask-panel panel"
+            aria-label="Fråga om matcher"
+            role="dialog"
+            aria-modal="false"
+          >
+            <header className="chat-panel-head">
+              <div>
+                <p className="banner-kicker">Assistent</p>
+                <h3>Fråga om matcher</h3>
+              </div>
+              <button type="button" className="chip" onClick={() => setShowChat(false)}>
+                Stäng
+              </button>
+            </header>
+
+            <div className="chip-row tight plan-tabs" role="tablist" aria-label="Frågetyp">
+              {(
+                [
+                  ['ask', 'Fråga'],
+                  ['route', 'Samma dag'],
+                  ['along', 'Längs vägen'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={assistantTab === key}
+                  className={`chip ${assistantTab === key ? 'active' : ''}`}
+                  onClick={() => {
+                    setAssistantTab(key)
+                    persistAskSession({ tab: key })
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="chat-panel-body">
+              {assistantTab === 'ask' && (
+                <>
+                  <p className="cluster-lede">
+                    Ställ en fråga om matcher
+                    {basePlace ? ` · från ${basePlace.query}` : ''}
+                    {watchTeams.length > 0 ? ` · ${watchTeams.length} bevakade` : ''}
+                    {shortlist.length > 0 ? ` · ${shortlist.length} sparade` : ''}.
+                  </p>
+                  <div className="ask-examples">
+                    {askExamples.map((ex) => (
+                      <button
+                        key={ex}
+                        type="button"
+                        className="chip"
+                        disabled={askBusy}
+                        onClick={() => void submitAsk(ex)}
+                      >
+                        {ex.length > 56 ? `${ex.slice(0, 54)}…` : ex}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="can-make-row">
+                    <p className="hint inline-hint">Hinner jag A sedan B?</p>
+                    <div className="base-row">
+                      <input
+                        type="text"
+                        aria-label="Första lag eller match"
+                        placeholder="T.ex. AIK"
+                        value={canA}
+                        onChange={(e) => setCanA(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        aria-label="Andra lag eller match"
+                        placeholder="T.ex. ungdomsmatch"
+                        value={canB}
+                        onChange={(e) => setCanB(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="chip"
+                        disabled={askBusy || !canA.trim() || !canB.trim()}
+                        onClick={() => void submitCanMake()}
+                      >
+                        Kolla
+                      </button>
+                    </div>
+                  </div>
+                  <label className="field">
+                    <span className="sr-only">Din fråga</span>
+                    <div className="base-row">
+                      <input
+                        ref={askInputRef}
+                        type="text"
+                        value={askDraft}
+                        placeholder="T.ex. vilka matcher hinner jag i Stockholm?"
+                        disabled={askBusy}
+                        onChange={(e) => setAskDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            void submitAsk()
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="chip active"
+                        disabled={askBusy || !askDraft.trim()}
+                        onClick={() => void submitAsk()}
+                      >
+                        {askBusy ? 'Söker…' : 'Fråga'}
+                      </button>
+                    </div>
+                  </label>
+                  {askError && <p className="hint warn">{askError}</p>}
+                  {askResult && renderAskMatches(askResult)}
+                </>
+              )}
+
+              {assistantTab === 'along' && (
+                <>
+                  <p className="cluster-lede">
+                    Hitta matcher längs en bilresa. Välj själv vilka du stannar för.
+                  </p>
+                  <div className="base-row along-inputs">
+                    <input
+                      type="text"
+                      value={alongFrom}
+                      aria-label="Från"
+                      placeholder="Från"
+                      onChange={(e) => setAlongFrom(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      value={alongTo}
+                      aria-label="Till"
+                      placeholder="Till"
+                      onChange={(e) => setAlongTo(e.target.value)}
+                    />
+                    <input
+                      type="time"
+                      value={alongTime}
+                      aria-label="Avresa"
+                      onChange={(e) => setAlongTime(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="chip active"
+                      disabled={alongBusy || !alongFrom.trim() || !alongTo.trim()}
+                      onClick={() => void submitAlongRoute()}
+                    >
+                      {alongBusy ? 'Söker…' : 'Sök'}
+                    </button>
+                  </div>
+                  {alongError && <p className="hint warn">{alongError}</p>}
+                  {alongResult && renderAskMatches(alongResult)}
+                </>
+              )}
+
+              {assistantTab === 'route' && (
+                <>
+                  <p className="cluster-lede">
+                    Föreslagen rutt bland matcherna du ser
+                    {basePlace ? ` · från ${basePlace.query}` : ''}.
+                  </p>
+                  {!basePlace && (
+                    <label className="field">
+                      <span className="sr-only">Basort</span>
+                      <div className="base-row">
+                        <input
+                          type="text"
+                          placeholder="Var utgår du ifrån? t.ex. Göteborg"
+                          value={baseDraft}
+                          onChange={(e) => setBaseDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              void saveBase()
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="chip active"
+                          disabled={baseBusy || !baseDraft.trim()}
+                          onClick={() => void saveBase()}
+                        >
+                          {baseBusy ? '…' : 'Sätt bas'}
+                        </button>
+                      </div>
+                    </label>
+                  )}
+                  <div className="chip-row tight" role="group" aria-label="Tid på plats">
+                    <span className="hint inline-hint">Tid per match:</span>
+                    {[45, 60, 90].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        className={`chip ${watchMinutes === m ? 'active' : ''}`}
+                        onClick={() => setWatchMinutes(m)}
+                      >
+                        {m} min
+                      </button>
+                    ))}
+                  </div>
+                  {dayRoute && dayRoute.stops.length === 0 && (
+                    <p className="hint warn">
+                      Ingen rutt ännu.
+                      {dayRoute.unmapped > 0
+                        ? ` ${dayRoute.unmapped} matcher saknar plats på kartan.`
+                        : ' Prova färre filter eller kortare tid på plats.'}
+                    </p>
+                  )}
+                  {dayRoute && dayRoute.stops.length > 0 && (
+                    <>
+                      <p className="cluster-lede">
+                        {dayRoute.stops.length} matcher · {formatKm(dayRoute.totalKm)} ·{' '}
+                        {formatDrive(dayRoute.totalDriveMinutes)}
+                        {dayRoute.skipped > 0 ? ` · ${dayRoute.skipped} hoppades över` : ''}
+                      </p>
+                      <ol className="travel-list">
+                        {dayRoute.stops.map((stop, i) => (
+                          <li key={stop.game.gameId}>
+                            <strong>
+                              {kickoffClock(stop.game.date)}
+                              {i > 0
+                                ? ` · ankomst ca ${clockFromMs(stop.arriveAt)}`
+                                : ` · åk senast ${clockFromMs(stop.departAt)}`}
+                            </strong>{' '}
+                            {stop.game.homeTeam.name.trim()} – {stop.game.awayTeam.name.trim()}
+                            <br />
+                            <span>
+                              {stop.game.location}
+                              {stop.driveMinutesFromPrev > 0
+                                ? ` · ${formatKm(stop.kmFromPrev)} · ${formatDrive(stop.driveMinutesFromPrev)}`
+                                : i === 0 && basePlace
+                                  ? ` · ${formatKm(stop.kmFromPrev)} från bas`
+                                  : ''}
+                              {stop.slackMinutes > 0
+                                ? ` · ${stop.slackMinutes} min marginal`
+                                : ''}
+                            </span>
+                            <br />
+                            <a
+                              className="maps-link"
+                              href={mapsPlaceUrl({ lat: stop.lat, lon: stop.lon })}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Visa i Maps
+                            </a>
+                          </li>
+                        ))}
+                      </ol>
+                      <div className="return-actions">
+                        {dayRouteMapsUrl && (
+                          <a
+                            className="chip active maps-chip"
+                            href={dayRouteMapsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Navigera hela rutten
+                          </a>
+                        )}
+                        <button type="button" className="chip" onClick={applyDayRouteToShortlist}>
+                          Lägg i mina matcher
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </section>
+        )}
+
+        <button
+          type="button"
+          className={`chat-fab ${showChat ? 'open' : ''}`}
+          aria-expanded={showChat}
+          onClick={() => {
+            setShowChat((v) => {
+              const next = !v
+              if (next && !canA && watchTeams.length > 0) {
+                setCanA(watchTeams[0] ?? '')
+                if (watchTeams.length >= 2) setCanB(watchTeams[1] ?? '')
+              }
+              return next
+            })
+          }}
+        >
+          <span className="chat-fab-label">{showChat ? 'Stäng' : 'Fråga'}</span>
+        </button>
+      </div>
     </div>
   )
 }
@@ -2100,10 +2161,10 @@ function AgentActions({
         <button
           type="button"
           className={`icon-btn ${shortlisted ? 'on' : ''}`}
-          title="Lägg i scoutlista"
+          title="Lägg i mina matcher"
           onClick={onToggleShortlist}
         >
-          {shortlisted ? 'I listan' : '+ Lista'}
+          {shortlisted ? 'Sparad' : '+ Spara'}
         </button>
         <button type="button" className={`icon-btn ${note ? 'on' : ''}`} onClick={onToggleNote}>
           Anteckning

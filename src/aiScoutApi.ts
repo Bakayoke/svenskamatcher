@@ -71,8 +71,38 @@ export async function alongRouteApi(input: {
   return res.json() as Promise<{ summary: string; matches: ScoutAskMatch[]; ok: boolean }>
 }
 
+/** Static fallbacks when the user has no personal context yet. */
 export const ASK_EXAMPLES = [
   'Jag är i Stockholm och vill se matcher hela dagen – vad rekommenderar du?',
   'Jag ska åka från Uppsala till Malmö, vilka matcher kan jag gå på längs vägen om jag börjar åka kl 08?',
   'Hinner jag se AIK och sedan en ungdomsmatch?',
 ]
+
+export function buildAskExamples(opts: {
+  baseQuery?: string
+  watchTeams: string[]
+  shortlistCount: number
+}): string[] {
+  const out: string[] = []
+  const place = opts.baseQuery?.trim() || 'Stockholm'
+  out.push(`Jag är i ${place} och vill se matcher hela dagen – vad rekommenderar du?`)
+  out.push(
+    'Jag ska åka från Uppsala till Malmö, vilka matcher kan jag gå på längs vägen om jag börjar åka kl 08?',
+  )
+  if (opts.watchTeams.length >= 2) {
+    out.push(`Hinner jag se ${opts.watchTeams[0]} och sedan ${opts.watchTeams[1]}?`)
+  } else if (opts.watchTeams.length === 1) {
+    out.push(`Vilka matcher har ${opts.watchTeams[0]} i det här intervallet?`)
+    out.push('Hinner jag se AIK och sedan en ungdomsmatch?')
+  } else {
+    out.push('Hinner jag se AIK och sedan en ungdomsmatch?')
+  }
+  if (opts.shortlistCount >= 2) {
+    out.push('Hinner jag se mina sparade matcher samma dag?')
+  } else if (opts.watchTeams.length > 0) {
+    out.push('Vilka matcher har mina bevakade lag?')
+  }
+  out.push(`Vilka ungdomsmatcher finns nära ${place}?`)
+  // unique, max 6
+  return [...new Set(out)].slice(0, 6)
+}

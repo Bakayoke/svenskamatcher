@@ -11,6 +11,7 @@ const DISMISS_TOMORROW_KEY = 'sm.dismissTomorrow'
 const ONBOARDING_KEY = 'sm.onboardingDone'
 const PARENT_KEY = 'sm.parentMode'
 const LAST_SCOUTED_KEY = 'sm.lastScouted'
+const LAST_ASK_KEY = 'sm.lastAsk'
 
 export type BasePlace = {
   query: string
@@ -233,6 +234,39 @@ export function pushLastScouted(
   ].slice(0, 12)
   writeJson(LAST_SCOUTED_KEY, next)
   return next
+}
+
+export type LastAskSession = {
+  draft: string
+  answer: string | null
+  tab: 'ask' | 'route' | 'along'
+  alongFrom?: string
+  alongTo?: string
+  alongTime?: string
+  canA?: string
+  canB?: string
+  matches?: Array<{
+    gameId: number
+    date: string
+    home: string
+    away: string
+    competitionName: string
+    location: string
+    url: string
+    lat?: number
+    lon?: number
+    genderName?: string
+    ageCategoryName?: string
+  }>
+}
+
+export function loadLastAsk(): LastAskSession | null {
+  return readJson<LastAskSession | null>(LAST_ASK_KEY, null)
+}
+
+export function saveLastAsk(session: LastAskSession | null) {
+  if (!session) localStorage.removeItem(LAST_ASK_KEY)
+  else writeJson(LAST_ASK_KEY, session)
 }
 
 const ELIT_RE =

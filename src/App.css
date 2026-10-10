@@ -1,7 +1,7 @@
 .page {
   width: min(1120px, calc(100% - 2rem));
   margin: 0 auto;
-  padding: 2.5rem 0 4rem;
+  padding: 2.5rem 0 6.5rem;
 }
 
 .sr-only {
@@ -74,6 +74,119 @@
   flex-wrap: wrap;
   gap: 0.4rem;
   align-items: center;
+}
+
+.plan-tabs {
+  margin-bottom: 0.65rem;
+}
+
+.search-primary {
+  margin: 0.55rem 0 0.35rem;
+}
+
+.chat-dock {
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.65rem;
+  max-width: min(26rem, calc(100vw - 1.5rem));
+  pointer-events: none;
+}
+
+.chat-dock > * {
+  pointer-events: auto;
+}
+
+.chat-fab {
+  border: none;
+  border-radius: 999px;
+  min-width: 3.6rem;
+  height: 3.6rem;
+  padding: 0 1.25rem;
+  background: var(--ink);
+  color: var(--chalk);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 28px rgba(11, 28, 44, 0.35);
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.chat-fab:hover {
+  transform: translateY(-2px);
+  background: #143049;
+}
+
+.chat-fab.open {
+  background: var(--yellow-deep);
+  color: var(--ink);
+}
+
+.chat-panel {
+  width: min(26rem, calc(100vw - 1.5rem));
+  max-height: min(70vh, 36rem);
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0.85rem 0.9rem 1rem;
+  box-shadow: 0 16px 40px rgba(11, 28, 44, 0.28);
+  animation: rise-in 0.25s ease both;
+}
+
+.chat-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.chat-panel-head h3 {
+  margin: 0.1rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.chat-panel-body {
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  gap: 0.55rem;
+  padding-right: 0.15rem;
+}
+
+.can-make-row {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.along-inputs {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 520px) {
+  .chat-panel {
+    max-height: min(75vh, 32rem);
+  }
+
+  .chat-fab {
+    min-width: 3.25rem;
+    height: 3.25rem;
+    padding: 0 1.05rem;
+    font-size: 0.92rem;
+  }
 }
 
 .tools-row {
@@ -1067,15 +1180,21 @@ a.maps-chip {
 
 .clusters {
   margin-bottom: 1.25rem;
-  padding: 0.9rem 1rem 1rem;
+  padding: 0.75rem 1rem;
 }
 
-.clusters h3 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
+.clusters > summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.clusters > summary::-webkit-details-marker {
+  display: none;
+}
+
+.clusters[open] > summary {
+  margin-bottom: 0.65rem;
 }
 
 .cluster-lede {
@@ -1183,6 +1302,7 @@ a.maps-chip {
   .app-shell .controls,
   .app-shell .footer,
   .app-shell .no-print,
+  .chat-dock,
   .app-shell .timeline,
   .app-shell .competition-stack,
   .app-shell .results-head,
