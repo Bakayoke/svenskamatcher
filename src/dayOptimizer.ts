@@ -17,11 +17,11 @@ export type DayRouteOptions = {
 }
 
 export const DEFAULT_DAY_ROUTE: DayRouteOptions = {
-  watchMinutes: 60,
+  watchMinutes: 75,
   arriveBufferMinutes: 15,
   speedKmh: 55,
   roadFactor: 1.35,
-  maxLegKm: 120,
+  maxLegKm: 80,
 }
 
 export type RouteStop = {

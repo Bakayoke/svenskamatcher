@@ -24,6 +24,11 @@ type PlannedCall = { name: string; arguments: Record<string, unknown> }
 
 const SYSTEM_PLAN = `Du är en planerare för Svenska Matcher (svensk fotboll).
 Välj ENDAST verktyg från listan. Hitta aldrig på matcher.
+Viktigt:
+- Frågor om vad man HINNER / rekommendera / hela dagen → day_route (inte search_matches).
+- Bilresa / längs vägen / från X till Y → matches_along_route.
+- "Hinner jag se A och B" → can_make_matches.
+- search_matches är bara inventering, inte en genomförbar plan.
 Svara med JSON: {"tools":[{"name":"...","arguments":{...}}]}
 Om frågan inte handlar om svenska matcher/resor/scouting: {"tools":[],"out_of_scope":true}
 Verktyg:
@@ -31,8 +36,9 @@ ${TOOL_DEFINITIONS.map((t: (typeof TOOL_DEFINITIONS)[number]) => `- ${t.name}: $
 
 const SYSTEM_ANSWER = `Du är scoutassistent för Svenska Matcher.
 Svara kort på svenska. Använd ENDAST fakta från VERKTYGSRESULTAT.
-Lista konkreta matcher med tid och plats. Hitta aldrig på data.
-Om resultatet är tomt, säg det tydligt. Ingen markdown-rubrik.`
+Om resultatet är en genomförbar dagsrutt/kedja: rekommendera BARA de matcherna och nämn att tiderna är kontrollerade.
+Om resultatet är en okontrollerad lista: säg uttryckligen att man troligen inte hinner alla, och föreslå att fråga om dagsrutt.
+Hitta aldrig på matcher. Ingen markdown-rubrik.`
 
 function extractJson(text: string): unknown | null {
   const trimmed = text.trim()
@@ -49,11 +55,19 @@ function extractJson(text: string): unknown | null {
   }
 }
 
+function isStrongPlan(plan: PlannedCall[]) {
+  return plan.some(
+    (p) =>
+      p.name === 'matches_along_route' ||
+      p.name === 'day_route' ||
+      p.name === 'can_make_matches',
+  )
+}
+
 function heuristicPlan(message: string, ctx: ScoutContext): PlannedCall[] {
   const q = message.trim()
   const lower = q.toLowerCase()
 
-  // along route: "från X till Y", "längs vägen", "åka från"
   const along =
     /(?:från|start(?:ar)?(?:\s+i)?)\s+([a-zåäöA-ZÅÄÖ\s\-]+?)\s+till\s+([a-zåäöA-ZÅÄÖ\s\-]+?)(?:\s|,|\.|$)/i.exec(
       q,
@@ -62,8 +76,14 @@ function heuristicPlan(message: string, ctx: ScoutContext): PlannedCall[] {
       q,
     )
   if (along || /längs\s+vägen|på\s+vägen\s+till|bilresa/.test(lower)) {
-    const fromPlace = along?.[1]?.trim() || 'Uppsala'
-    const toPlace = along?.[2]?.trim() || 'Malmö'
+    let fromPlace = along?.[1]?.trim() || 'Uppsala'
+    let toPlace = along?.[2]?.trim() || 'Malmö'
+    // UI form / short phrasing: "uppsala malmö"
+    const bare = /^([a-zåäö\-]+)\s+([a-zåäö\-]+)$/i.exec(q.trim())
+    if (!along && bare) {
+      fromPlace = bare[1]!
+      toPlace = bare[2]!
+    }
     const time = /(\d{1,2})[:.](\d{2})/.exec(q)
     const departTime = time
       ? `${String(time[1]).padStart(2, '0')}:${time[2]}`
@@ -83,12 +103,10 @@ function heuristicPlan(message: string, ctx: ScoutContext): PlannedCall[] {
     ]
   }
 
-  // can make two matches
-  if (/hinner\s+jag|hinna\s+se|både|och\s+sedan|därefter/.test(lower)) {
+  if (/hinner\s+jag|hinna\s+se|och\s+sedan|därefter/.test(lower) && !/hela\s+dagen/.test(lower)) {
     const teams: string[] = []
     const quoted = [...q.matchAll(/"([^"]+)"/g)].map((m) => m[1]!)
     teams.push(...quoted)
-    // "match X" / lag-ish tokens after "se"
     const se = /se\s+([^,?]+?)(?:,|\s+och\s+|\s+hinner|\s+sedan|$)/gi
     let m: RegExpExecArray | null
     while ((m = se.exec(q))) {
@@ -107,30 +125,34 @@ function heuristicPlan(message: string, ctx: ScoutContext): PlannedCall[] {
     }
   }
 
-  // day route / whole day recommendations
+  const place =
+    /(?:i|från|vid|nära|runt)\s+([A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-]+(?:\s+[A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-]+)?)/.exec(
+      q,
+    )?.[1] || ctx.baseQuery
+
+  // Recommendations / whole day / "matcher i X" → feasible day route, not raw list
   if (
-    /hela\s+dagen|dagsrutt|rekommender|hinner\s+jag\s+se|vilka\s+matcher\s+kan|planera\s+dagen/.test(
+    /hela\s+dagen|dagsrutt|rekommender|hinner|vilka\s+matcher|planera|matcher\s+i\s+|se\s+matcher/.test(
       lower,
     )
   ) {
-    const place =
-      /(?:i|från|vid)\s+([A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-]+(?:\s+[A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-]+)?)/.exec(q)?.[1] ||
-      ctx.baseQuery
-    return [{ name: 'day_route', arguments: place ? { place } : {} }]
-  }
-
-  // near place search
-  const near = /(?:i|nära|runt)\s+([A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-]+)/.exec(q)
-  if (near) {
     return [
       {
-        name: 'search_matches',
-        arguments: { near: near[1], query: ctx.query, maxKm: 45 },
+        name: 'day_route',
+        arguments: place ? { place, watchMinutes: 75, maxKm: 50 } : { watchMinutes: 75 },
       },
     ]
   }
 
-  // generic search – strip filler words
+  if (place && /(?:i|nära|runt)\s+/i.test(q)) {
+    return [
+      {
+        name: 'day_route',
+        arguments: { place, watchMinutes: 75, maxKm: 50 },
+      },
+    ]
+  }
+
   const cleaned = q
     .replace(/^(visa|hitta|sök|finns det)\s+/i, '')
     .replace(/\?+$/, '')
@@ -139,7 +161,7 @@ function heuristicPlan(message: string, ctx: ScoutContext): PlannedCall[] {
     return [{ name: 'search_matches', arguments: { query: cleaned, limit: 12 } }]
   }
 
-  return [{ name: 'day_route', arguments: {} }]
+  return [{ name: 'day_route', arguments: { watchMinutes: 75 } }]
 }
 
 async function planWithAi(
@@ -192,8 +214,7 @@ async function answerWithAi(ai: AiBinding, message: string, toolText: string): P
       max_tokens: 500,
       temperature: 0.2,
     })
-    const text =
-      typeof raw === 'string' ? raw : (raw.response ?? raw.result ?? '')
+    const text = typeof raw === 'string' ? raw : (raw.response ?? raw.result ?? '')
     const cleaned = String(text).trim()
     return cleaned || null
   } catch {
@@ -224,13 +245,18 @@ export async function askScout(
   }
 
   let mode: 'ai' | 'rules' = 'rules'
-  let plan = heuristicPlan(trimmed, ctx)
-  if (ai) {
+  const heuristic = heuristicPlan(trimmed, ctx)
+  let plan = heuristic
+
+  // Never let the LLM replace a strong travel/day-route plan with a loose search.
+  if (ai && !isStrongPlan(heuristic)) {
     const aiPlan = await planWithAi(ai, trimmed, ctx)
-    if (aiPlan) {
+    if (aiPlan && aiPlan.length > 0) {
       plan = aiPlan
       mode = 'ai'
     }
+  } else if (ai && isStrongPlan(heuristic)) {
+    mode = 'ai'
   }
 
   if (plan.length === 0) {
@@ -261,9 +287,15 @@ export async function askScout(
 
   const toolText = results.map((r) => r.summary).join('\n\n')
   let answer = fallbackAnswer(results)
-  if (ai && mode === 'ai') {
+  if (ai) {
     const polished = await answerWithAi(ai, trimmed, toolText)
-    if (polished) answer = polished
+    // Prefer tool summary if model invents extra matches or drops feasibility framing
+    if (polished && !/inventerad|tyvärr kan jag inte/i.test(polished)) {
+      const feasible = results.some((r) => r.meta?.feasibleOnly || r.meta?.chained)
+      if (feasible || polished.length < toolText.length + 80) {
+        answer = polished
+      }
+    }
   }
 
   return { answer, matches: matches.slice(0, 20), toolsUsed, mode }

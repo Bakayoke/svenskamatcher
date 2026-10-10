@@ -37,11 +37,49 @@ export type ScoutContext = {
   query?: string
 }
 
-const MAX_GEOCODE = 48
-const DEFAULT_WATCH = 60
+const MAX_GEOCODE = 60
+const DEFAULT_WATCH = 75
 const ARRIVE_BUFFER = 15
-const CORRIDOR_KM = 35
-const MAX_WAIT_AFTER_ETA_H = 4
+const CORRIDOR_KM = 55
+/** How long you may wait at a stop after earliest arrival before kickoff. */
+const MAX_WAIT_AFTER_ETA_H = 12
+
+/** Towns roughly along common SE corridors (E4/E6) – used to prioritize geocoding. */
+const CORRIDOR_TOWNS = [
+  'uppsala',
+  'märsta',
+  'stockholm',
+  'solna',
+  'sollentuna',
+  'södertälje',
+  'nyköping',
+  'norrköping',
+  'linköping',
+  'mjölby',
+  'tranås',
+  'järrfälla',
+  'järfälla',
+  'eskilstuna',
+  'västerås',
+  'örebro',
+  'nässjö',
+  'jönköping',
+  'värnamo',
+  'växjö',
+  'ljungby',
+  'hässleholm',
+  'kristianstad',
+  'helsingborg',
+  'lund',
+  'malmö',
+  'landskrona',
+  'trelleborg',
+  'kalmar',
+  'växjö',
+  'alvesta',
+  'höör',
+  'ängelholm',
+]
 
 function isoToday() {
   const d = new Date()
@@ -89,10 +127,31 @@ async function loadGames(ctx: ScoutContext): Promise<ScoutMatch[]> {
   return filterMatches(flatten(payload.competitions ?? []), ctx)
 }
 
-async function geocodeMany(locations: string[]): Promise<Record<string, GeoPoint>> {
-  const out: Record<string, GeoPoint> = {}
+function prioritizeLocations(locations: string[], hints: string[] = []): string[] {
   const unique = [...new Set(locations.map((l) => l.trim()).filter(Boolean))]
-  for (const loc of unique.slice(0, MAX_GEOCODE)) {
+  const hintSet = hints.map((h) => h.toLowerCase()).filter(Boolean)
+  const score = (loc: string) => {
+    const l = loc.toLowerCase()
+    let s = 0
+    for (const h of hintSet) {
+      if (h.length >= 3 && l.includes(h)) s += 10
+    }
+    for (const t of CORRIDOR_TOWNS) {
+      if (l.includes(t)) s += 3
+    }
+    return s
+  }
+  return unique.sort((a, b) => score(b) - score(a) || a.localeCompare(b, 'sv'))
+}
+
+async function geocodeMany(
+  locations: string[],
+  limit = MAX_GEOCODE,
+  hints: string[] = [],
+): Promise<Record<string, GeoPoint>> {
+  const out: Record<string, GeoPoint> = {}
+  const ordered = prioritizeLocations(locations, hints).slice(0, limit)
+  for (const loc of ordered) {
     try {
       const point = await geocodePlace(loc)
       if (point) out[loc.toLowerCase()] = point
@@ -183,9 +242,14 @@ function optimizeOneDay(
     const fromBase = base ? haversineKm(base, cur) : 0
     const driveFromBase = base ? estimateDriveMinutes(fromBase) : 0
     const need = cur.kickoff - ARRIVE_BUFFER * 60000
-    const arriveAt = need
     const leaveAt = cur.kickoff + watchMinutes * 60000
-    const baseOk = !base || fromBase <= 120
+    // Must be able to leave base early enough (assume awake from 07:00 local that day).
+    const dayStart = new Date(cur.kickoff)
+    dayStart.setHours(7, 0, 0, 0)
+    const arriveFromBase = dayStart.getTime() + driveFromBase * 60000
+    const baseOk =
+      !base ||
+      (fromBase <= 90 && arriveFromBase <= need)
 
     best[i] = baseOk
       ? {
@@ -194,7 +258,7 @@ function optimizeOneDay(
           totalKm: fromBase,
           kmFromPrev: fromBase,
           driveMinutes: driveFromBase,
-          arriveAt,
+          arriveAt: base ? arriveFromBase : need,
           leaveAt,
         }
       : {
@@ -203,7 +267,7 @@ function optimizeOneDay(
           totalKm: Infinity,
           kmFromPrev: fromBase,
           driveMinutes: driveFromBase,
-          arriveAt,
+          arriveAt: arriveFromBase,
           leaveAt,
         }
 
@@ -212,10 +276,14 @@ function optimizeOneDay(
       if (prevNode.count === 0) continue
       const prev = cands[j]!
       const km = haversineKm(prev, cur)
-      if (km > 120) continue
+      if (km > 80) continue
       const driveMin = estimateDriveMinutes(km)
       const arriveAtJ = prevNode.leaveAt + driveMin * 60000
+      // Require at least a small buffer: next kickoff must be after leave + drive + arrive buffer
       if (arriveAtJ > need) continue
+      // Reject “back-to-back”: need ≥ 20 min spare after arriving before kickoff
+      const slack = (need - arriveAtJ) / 60000
+      if (slack < 5) continue
       const count = prevNode.count + 1
       const totalKm = prevNode.totalKm + km
       if (count > best[i]!.count || (count === best[i]!.count && totalKm < best[i]!.totalKm)) {
@@ -322,9 +390,9 @@ export async function toolSearchMatches(
       summary:
         ranked.length === 0
           ? `Inga geokodade matcher inom ${maxKm} km från ${center.label}.`
-          : `Hittade ${ranked.length} matcher nära ${center.label}:\n${ranked.map((x) => summarizeMatch(x.g, formatKm(x.km))).join('\n')}`,
+          : `Matcher nära ${center.label} (lista – inte tidskontrollerad dagsrutt; använd day_route för vad du hinner):\n${ranked.map((x) => summarizeMatch(x.g, formatKm(x.km))).join('\n')}`,
       matches: ranked.map((x) => x.g),
-      meta: { near: center.label, maxKm },
+      meta: { near: center.label, maxKm, feasibleOnly: false },
     }
   }
 
@@ -341,21 +409,31 @@ export async function toolSearchMatches(
 
 export async function toolDayRoute(
   ctx: ScoutContext,
-  args: { place?: string; watchMinutes?: number },
+  args: { place?: string; watchMinutes?: number; maxKm?: number },
 ): Promise<ToolResult> {
+  const watch = args.watchMinutes ?? DEFAULT_WATCH
+  const maxKm = args.maxKm ?? 50
   const base = await resolveBase(ctx, args.place)
   const games = await loadGames(ctx)
-  const geo = await geocodeMany(games.map((g) => g.location))
-  const mapped = attachCoords(games, geo)
-  const route = optimizeDayRouteServer(mapped, base, args.watchMinutes ?? DEFAULT_WATCH)
+  const hints = [args.place ?? '', ctx.baseQuery ?? '', base?.label ?? '']
+  const geo = await geocodeMany(
+    games.map((g) => g.location),
+    MAX_GEOCODE,
+    hints,
+  )
+  let mapped = attachCoords(games, geo)
+  if (base) {
+    mapped = mapped.filter((g) => haversineKm(base, g) <= maxKm)
+  }
+  const route = optimizeDayRouteServer(mapped, base, watch)
   if (route.stops.length === 0) {
     return {
       ok: true,
       summary: base
-        ? `Ingen genomförbar dagsrutt från ${base.label} bland ${mapped.length} kartlagda matcher.`
-        : `Ingen genomförbar dagsrutt (ange basort). ${mapped.length} matcher hade karta.`,
+        ? `Ingen genomförbar dagsrutt inom ${maxKm} km från ${base.label} (med ${watch} min på varje match, bilbuffert mellan dem). ${mapped.length} kartlagda kandidater.`
+        : `Ingen genomförbar dagsrutt (ange basort/ort). ${mapped.length} matcher hade karta.`,
       matches: [],
-      meta: { unmapped: games.length - mapped.length },
+      meta: { unmapped: games.length - mapped.length, candidates: mapped.length, watchMinutes: watch },
     }
   }
   const lines = route.stops.map(
@@ -364,7 +442,7 @@ export async function toolDayRoute(
   )
   return {
     ok: true,
-    summary: `Dagsrutt (${route.stops.length} matcher · ${formatKm(route.totalKm)} · ${formatDrive(route.totalDriveMinutes)}${base ? ` från ${base.label}` : ''}):\n${lines.join('\n')}`,
+    summary: `Genomförbar dagsrutt – du hinner dessa med ${watch} min på varje plan och restid emellan (${route.stops.length} matcher · ${formatKm(route.totalKm)} · ${formatDrive(route.totalDriveMinutes)}${base ? ` från ${base.label}` : ''}):\n${lines.join('\n')}\nÖvriga ${route.skipped} kartlagda matcher i området krockar tidsmässigt.`,
     matches: route.stops.map((s) => ({
       gameId: s.gameId,
       date: s.date,
@@ -383,6 +461,8 @@ export async function toolDayRoute(
       totalDriveMinutes: route.totalDriveMinutes,
       skipped: route.skipped,
       base: base?.label,
+      watchMinutes: watch,
+      feasibleOnly: true,
     },
   }
 }
@@ -489,14 +569,24 @@ export async function toolAlongRoute(
   }
 
   const day = args.day ?? ctx.from ?? isoToday()
-  const games = await loadGames({ ...ctx, from: day, to: day })
-  const geo = await geocodeMany(games.map((g) => g.location))
+  // Long southbound trips: include next calendar day for evening matches near destination
+  const dayEnd = new Date(`${day}T12:00:00`)
+  dayEnd.setDate(dayEnd.getDate() + 1)
+  const toDay = `${dayEnd.getFullYear()}-${String(dayEnd.getMonth() + 1).padStart(2, '0')}-${String(dayEnd.getDate()).padStart(2, '0')}`
+  const games = await loadGames({ ...ctx, from: day, to: toDay })
+  const hints = [args.fromPlace, args.toPlace, fromP.label, toP.label, ...CORRIDOR_TOWNS]
+  const geo = await geocodeMany(
+    games.map((g) => g.location),
+    MAX_GEOCODE,
+    hints,
+  )
   const mapped = attachCoords(games, geo)
   const corridorKm = args.corridorKm ?? CORRIDOR_KM
   const depart = localDateTime(day, args.departTime ?? '08:00').getTime()
   const totalKm = haversineKm(fromP, toP)
   const totalDrive = estimateDriveMinutes(totalKm)
   const maxWait = MAX_WAIT_AFTER_ETA_H * 60
+  const watch = args.watchMinutes ?? DEFAULT_WATCH
 
   type Hit = ScoutMatch &
     LatLon & {
@@ -509,8 +599,13 @@ export async function toolAlongRoute(
   const hits: Hit[] = []
   for (const g of mapped) {
     const seg = distanceToSegmentKm(g, fromP, toP)
-    if (seg.km > corridorKm) continue
-    const kmAlong = seg.t * totalKm
+    const nearStart = haversineKm(fromP, g) <= corridorKm
+    const nearEnd = haversineKm(toP, g) <= corridorKm
+    const onCorridor = seg.km <= corridorKm && seg.t >= -0.02 && seg.t <= 1.02
+    if (!onCorridor && !nearStart && !nearEnd) continue
+
+    const t = onCorridor ? Math.max(0, Math.min(1, seg.t)) : nearStart ? 0 : 1
+    const kmAlong = t * totalKm
     const etaMs = depart + estimateDriveMinutes(kmAlong) * 60000
     const kickoff = parseKickoff(g.date).getTime()
     const need = kickoff - ARRIVE_BUFFER * 60000
@@ -519,45 +614,48 @@ export async function toolAlongRoute(
     if (slack > maxWait) continue
     hits.push({
       ...g,
-      corridorKm: seg.km,
+      corridorKm: onCorridor ? seg.km : nearStart ? haversineKm(fromP, g) : haversineKm(toP, g),
       kmAlong,
       etaMs,
       slackMinutes: slack,
     })
   }
 
-  hits.sort((a, b) => a.date.localeCompare(b.date) || a.kmAlong - b.kmAlong)
+  hits.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
 
-  // Prefer a feasible chain along the route
-  const chain = optimizeDayRouteServer(hits, fromP, args.watchMinutes ?? DEFAULT_WATCH)
+  // Feasible chain progressing along the route (not just any day route)
+  const chain = optimizeAlongRoute(hits, watch)
 
-  const useHits = chain.stops.length >= 2
-    ? chain.stops.map((s) => {
-        const hit = hits.find((h) => h.gameId === s.gameId)
-        return {
-          match: s as ScoutMatch & LatLon,
-          eta: s.arriveAt,
-          side: hit
-            ? `${formatKm(hit.corridorKm)} från vägen`
-            : `${formatKm(s.kmFromPrev)} från föregående`,
-        }
-      })
-    : hits.slice(0, 12).map((h) => ({
-        match: h as ScoutMatch & LatLon,
-        eta: clockFromMs(h.etaMs),
-        side: `${formatKm(h.corridorKm)} från vägen`,
-      }))
+  const useHits =
+    chain.length > 0
+      ? chain.map((h) => ({
+          match: h as ScoutMatch & LatLon,
+          eta: clockFromMs(h.etaMs),
+          side: `${formatKm(h.corridorKm)} från vägen · passerar ca ${clockFromMs(h.etaMs)}`,
+        }))
+      : hits.slice(0, 15).map((h) => ({
+          match: h as ScoutMatch & LatLon,
+          eta: clockFromMs(h.etaMs),
+          side: `${formatKm(h.corridorKm)} från vägen · tidigast framme ca ${clockFromMs(h.etaMs)}`,
+        }))
 
   const lines = useHits.map(
     (row, i) => `${i + 1}. ${summarizeMatch(row.match, `ETA ca ${row.eta} · ${row.side}`)}`,
   )
 
+  const modeNote =
+    chain.length > 0
+      ? `Genomförbar kedja (${watch} min/match):`
+      : hits.length > 0
+        ? `Alternativ längs vägen (var för sig – tiderna krockar om du försöker alla):`
+        : ''
+
   return {
     ok: true,
     summary:
       useHits.length === 0
-        ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}.`
-        : `Matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, ca ${formatKm(totalKm)}):\n${lines.join('\n')}`,
+        ? `Inga matcher längs ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, korridor ${corridorKm} km, ${mapped.length} kartlagda av ${games.length}). Totalsträcka ca ${formatKm(totalKm)} / ${formatDrive(totalDrive)}. Prova annat datum eller bredare urval.`
+        : `${modeNote} ${fromP.label} → ${toP.label} (${day}, start ${args.departTime ?? '08:00'}, ca ${formatKm(totalKm)}):\n${lines.join('\n')}`,
     matches: useHits.map((row) => ({
       gameId: row.match.gameId,
       date: row.match.date,
@@ -579,9 +677,54 @@ export async function toolAlongRoute(
       totalKm,
       totalDriveMinutes: totalDrive,
       corridorKm,
-      chained: chain.stops.length >= 2,
+      chained: chain.length > 0,
+      candidates: hits.length,
+      mapped: mapped.length,
+      watchMinutes: watch,
     },
   }
+}
+
+/** Greedy feasible picks ordered by progress along the drive. */
+function optimizeAlongRoute(
+  hits: Array<
+    ScoutMatch &
+      LatLon & {
+        corridorKm: number
+        kmAlong: number
+        etaMs: number
+        slackMinutes: number
+      }
+  >,
+  watchMinutes: number,
+) {
+  const sorted = hits.slice().sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
+  const picked: typeof hits = []
+  let leaveAt = 0
+  let last: (typeof hits)[number] | null = null
+
+  for (const h of sorted) {
+    const kickoff = parseKickoff(h.date).getTime()
+    const need = kickoff - ARRIVE_BUFFER * 60000
+    if (!last) {
+      if (h.etaMs > need) continue
+      picked.push(h)
+      leaveAt = kickoff + watchMinutes * 60000
+      last = h
+      continue
+    }
+    // Must move further along the route (or same area) and be reachable after previous watch
+    if (h.kmAlong + 5 < last.kmAlong) continue
+    const legKm = haversineKm(last, h)
+    const drive = estimateDriveMinutes(legKm)
+    const arrive = Math.max(leaveAt + drive * 60000, h.etaMs)
+    if (arrive > need) continue
+    if ((need - arrive) / 60000 < 5) continue
+    picked.push(h)
+    leaveAt = kickoff + watchMinutes * 60000
+    last = h
+  }
+  return picked
 }
 
 export const TOOL_DEFINITIONS = [
@@ -602,12 +745,13 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'day_route',
     description:
-      'Bygg optimal dagsrutt: vilka matcher hinner man se samma dag från en basort.',
+      'Bygg GENOMFÖRBAR dagsrutt: endast matcher man tidsmässigt hinner se samma dag från en ort (restid + tid på plats). Använd detta för rekommendationer – inte search_matches.',
     parameters: {
       type: 'object',
       properties: {
         place: { type: 'string', description: 'Basort om annan än användarens sparade' },
-        watchMinutes: { type: 'number', description: 'Minuter på plats per match (45/60/90)' },
+        watchMinutes: { type: 'number', description: 'Minuter på plats per match (default 75)' },
+        maxKm: { type: 'number', description: 'Max avstånd från basort (default 50)' },
       },
     },
   },
@@ -665,6 +809,7 @@ export async function runScoutTool(
       return toolDayRoute(ctx, {
         place: typeof rawArgs.place === 'string' ? rawArgs.place : undefined,
         watchMinutes: typeof rawArgs.watchMinutes === 'number' ? rawArgs.watchMinutes : undefined,
+        maxKm: typeof rawArgs.maxKm === 'number' ? rawArgs.maxKm : undefined,
       })
     case 'can_make_matches':
       return toolCanMake(ctx, {
