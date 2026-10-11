@@ -1,0 +1,4 @@
+Contact: mailto:linus.stenvi@gmail.com
+Expires: 2027-10-11T22:00:00.000Z
+Canonical: https://svenskamatcher.com/.well-known/security.txt
+Preferred-Languages: sv, en

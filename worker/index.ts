@@ -211,6 +211,24 @@ export default {
       return json({ error: 'Not found' }, { status: 404 })
     }
 
+    if (
+      url.pathname === '/.well-known/security.txt' ||
+      url.pathname === '/security.txt'
+    ) {
+      const asset = await env.ASSETS.fetch(
+        new URL('/.well-known/security.txt', request.url),
+      )
+      if (!asset.ok) {
+        return new Response('Not found', { status: 404 })
+      }
+      return new Response(await asset.text(), {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      })
+    }
+
     const path = url.pathname.replace(/\/+$/, '') || '/'
     if (
       path === '/idag' ||
