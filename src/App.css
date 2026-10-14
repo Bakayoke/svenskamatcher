@@ -1035,6 +1035,15 @@ a.maps-chip {
   flex: 1;
 }
 
+.landing-banner {
+  border-left: 4px solid var(--blue);
+  align-items: flex-start;
+}
+
+.landing-banner .banner-kicker {
+  color: var(--blue);
+}
+
 .return-banner {
   display: flex;
   flex-wrap: wrap;

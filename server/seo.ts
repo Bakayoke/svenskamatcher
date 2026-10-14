@@ -282,9 +282,13 @@ function renderSeoBody(opts: {
   <h1>${esc(opts.h1)}</h1>
   <p>${esc(opts.description)}</p>
   <p><em>Period: ${esc(opts.dateLabel)} · ${opts.games.length} matcher</em></p>
+  <p class="seo-cta">
+    Aktivera JavaScript för full vy: byt datum, spara matcher, fråga assistenten och planera
+    dagsrutt eller bilresa.
+    <a href="/idag">Idag</a> · <a href="/imorgon">Imorgon</a> · <a href="/">Startsida</a>
+  </p>
   ${rows}
   ${opts.discoverHtml}
-  <p><a href="/">Öppna full scoutvy</a> · <a href="/idag">Idag</a> · <a href="/imorgon">Imorgon</a></p>
 </section>`
 }
 

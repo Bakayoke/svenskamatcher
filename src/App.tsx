@@ -1101,7 +1101,15 @@ export default function App() {
       <header className="hero">
         <p className="eyebrow">Svensk fotboll</p>
         <h1 className="brand">Svenska Matcher</h1>
-        <p className="lede">Välj datum, hitta matcher — fråga assistenten nere till höger.</p>
+        <p className="lede">
+          {teamFocus
+            ? `Matcher för ${teamFocus} — byt datum, spara eller fråga assistenten.`
+            : filters.districtId !== 'all'
+              ? `Matcher i ${districtName(Number(filters.districtId))} — byt datum eller planera dagen.`
+              : viewingToday
+                ? 'Dagens matcher — spara lag och planera med Fråga nere till höger.'
+                : 'Välj datum, hitta matcher — fråga assistenten nere till höger.'}
+        </p>
       </header>
 
       {showTomorrowBanner && tomorrowWatchCount != null && tomorrowWatchCount > 0 && (
@@ -1697,29 +1705,79 @@ export default function App() {
 
         {error && <p className="error-box">{error}</p>}
 
-        {(teamFocus || clusterId) && (
-          <div className="focus-banner no-print">
-            {teamFocus && (
-              <p>
-                Visar matcher för <strong>{teamFocus}</strong> i valt intervall.
+        {(teamFocus || filters.districtId !== 'all' || clusterId) && (
+          <div className="focus-banner landing-banner no-print" role="region" aria-label="Aktuell vy">
+            <div>
+              <p className="banner-kicker">
+                {teamFocus ? 'Lag' : filters.districtId !== 'all' ? 'Distrikt' : 'Urval'}
               </p>
-            )}
-            {clusterId && (
               <p>
-                Visar kluster:{' '}
-                <strong>{clusters.find((c) => c.id === clusterId)?.label ?? 'valt'}</strong>
+                {teamFocus && (
+                  <>
+                    Visar <strong>{teamFocus}</strong> i valt intervall.
+                  </>
+                )}
+                {!teamFocus && filters.districtId !== 'all' && (
+                  <>
+                    Visar <strong>{districtName(Number(filters.districtId))}</strong> i valt
+                    intervall.
+                  </>
+                )}
+                {clusterId && (
+                  <>
+                    {teamFocus || filters.districtId !== 'all' ? ' · ' : ''}
+                    Kluster:{' '}
+                    <strong>{clusters.find((c) => c.id === clusterId)?.label ?? 'valt'}</strong>
+                  </>
+                )}
               </p>
-            )}
-            <button
-              type="button"
-              className="chip"
-              onClick={() => {
-                setTeamFocus(null)
-                setClusterId(null)
-              }}
-            >
-              Visa alla
-            </button>
+            </div>
+            <div className="return-actions">
+              <button
+                type="button"
+                className="chip active"
+                onClick={() => {
+                  setShowChat(true)
+                  setAssistantTab('ask')
+                  trackView('ask')
+                }}
+              >
+                Fråga
+              </button>
+              <button
+                type="button"
+                className="chip"
+                onClick={() => {
+                  setShowChat(true)
+                  setAssistantTab('route')
+                  trackView('route')
+                }}
+              >
+                Samma dag
+              </button>
+              <button
+                type="button"
+                className="chip"
+                onClick={() => {
+                  const hadLanding = Boolean(teamFocus) || filters.districtId !== 'all'
+                  setTeamFocus(null)
+                  setClusterId(null)
+                  if (filters.districtId !== 'all') {
+                    setFilters((f) => ({ ...f, districtId: 'all' }))
+                  }
+                  if (hadLanding) {
+                    navigateSeo('home')
+                    const today = new Date()
+                    setMode('single')
+                    setSingle(today)
+                    setRange({ from: today, to: today })
+                    setPreset('all')
+                  }
+                }}
+              >
+                Visa alla
+              </button>
+            </div>
           </div>
         )}
 
