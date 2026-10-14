@@ -165,7 +165,7 @@ function stampReleasePlugin(): Plugin {
     apply: 'build',
     closeBundle() {
       const buildId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      const dist = path.resolve(__dirname, 'dist')
+      const dist = path.resolve(import.meta.dirname, 'dist')
       const swPath = path.join(dist, 'sw.js')
       if (existsSync(swPath)) {
         const sw = readFileSync(swPath, 'utf8')

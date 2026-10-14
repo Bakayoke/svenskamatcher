@@ -89,6 +89,7 @@ import { buildTravelPlan, travelPlanSummary } from './travelPlan'
 import { DEFAULT_DESC, useDocumentMeta } from './useDocumentMeta'
 import { useInstallPrompt } from './useInstallPrompt'
 import { formatKm, sortGamesByDistance, useVenueEnrichment } from './useVenueEnrichment'
+import { trackView } from './analytics'
 import './App.css'
 
 type Mode = 'single' | 'range'
@@ -784,6 +785,7 @@ export default function App() {
   }
 
   async function copyShareLink() {
+    trackView('share')
     await navigator.clipboard.writeText(window.location.href)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1600)
@@ -791,6 +793,7 @@ export default function App() {
 
   async function copyShortlistShareLink() {
     if (shortlist.length === 0) return
+    trackView('share')
     await navigator.clipboard.writeText(shortlistShareUrl(shortlist))
     setListaCopied(true)
     window.setTimeout(() => setListaCopied(false), 1800)
@@ -940,6 +943,15 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [showChat])
+
+  useEffect(() => {
+    if (!showChat) return
+    trackView(assistantTab)
+  }, [showChat, assistantTab])
+
+  useEffect(() => {
+    if (showShortlistOnly) trackView('shortlist')
+  }, [showShortlistOnly])
 
   useEffect(() => {
     if (!showChat || assistantTab !== 'ask') return
@@ -1759,7 +1771,10 @@ export default function App() {
                         )
                         navigateSeo('team', { team: name })
                       }}
-                      onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
+                      onToggleWatch={(name) => {
+                        trackView('watch')
+                        setWatchTeams(toggleWatchTeam(name, watchTeams))
+                      }}
                       onToggleShortlist={() => {
                         const next = toggleShortlist(game, shortlist)
                         setShortlist(next)
@@ -1803,7 +1818,10 @@ export default function App() {
                   setTeamFocus(name)
                   navigateSeo('team', { team: name })
                 }}
-                onToggleWatch={(name) => setWatchTeams(toggleWatchTeam(name, watchTeams))}
+                onToggleWatch={(name) => {
+                  trackView('watch')
+                  setWatchTeams(toggleWatchTeam(name, watchTeams))
+                }}
                 onToggleShortlist={(game) => setShortlist(toggleShortlist(game, shortlist))}
                 onToggleNote={(id) => setNoteGameId((cur) => (cur === id ? null : id))}
                 onNoteChange={(id, value) => setNotes(saveNote(id, value, notes))}

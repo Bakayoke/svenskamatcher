@@ -13,6 +13,8 @@ export interface Env {
     ) => Promise<{ response?: string; result?: string } | string>
   }
   GOOGLE_SITE_VERIFICATION?: string
+  /** Cloudflare Web Analytics site token (beacon). */
+  CF_WEB_ANALYTICS_TOKEN?: string
 }
 
 const askHits = new Map<string, { count: number; resetAt: number }>()
@@ -62,6 +64,22 @@ function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers })
 }
 
+function injectWebAnalytics(html: string, env: Env): string {
+  const token = env.CF_WEB_ANALYTICS_TOKEN?.trim()
+  if (!token || html.includes('cloudflareinsights.com/beacon')) return html
+  const beacon = JSON.stringify({ token, spa: true })
+  const snippet = `<!-- Cloudflare Web Analytics --><script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='${beacon}'></script><!-- End Cloudflare Web Analytics -->`
+  if (html.includes('</body>')) return html.replace('</body>', `${snippet}\n</body>`)
+  return `${html}\n${snippet}`
+}
+
+async function htmlResponse(html: string, env: Env, init?: ResponseInit) {
+  const headers = new Headers(init?.headers)
+  headers.set('Content-Type', 'text/html; charset=utf-8')
+  headers.delete('content-length')
+  return new Response(injectWebAnalytics(html, env), { ...init, headers })
+}
+
 async function seoPage(request: Request, env: Env, pathname: string) {
   const assetRes = await env.ASSETS.fetch(new URL('/index.html', request.url))
   let html = await assetRes.text()
@@ -73,11 +91,8 @@ async function seoPage(request: Request, env: Env, pathname: string) {
       `<meta name="google-site-verification" content="${token}" />\n  </head>`,
     )
   }
-  return new Response(html, {
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=120',
-    },
+  return htmlResponse(html, env, {
+    headers: { 'Cache-Control': 'public, max-age=120' },
   })
 }
 
@@ -244,20 +259,21 @@ export default {
       }
     }
 
-    // Home: optional verification meta
-    if ((path === '/' || path === '') && env.GOOGLE_SITE_VERIFICATION?.trim()) {
-      const assetRes = await env.ASSETS.fetch(new URL('/index.html', request.url))
-      let html = await assetRes.text()
+    const assetRes = await env.ASSETS.fetch(request)
+    const contentType = assetRes.headers.get('content-type') || ''
+    if (!contentType.includes('text/html')) return assetRes
+
+    let html = await assetRes.text()
+    if (env.GOOGLE_SITE_VERIFICATION?.trim() && !html.includes('google-site-verification')) {
       const token = env.GOOGLE_SITE_VERIFICATION.trim()
       html = html.replace(
         '</head>',
         `<meta name="google-site-verification" content="${token}" />\n  </head>`,
       )
-      return new Response(html, {
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      })
     }
-
-    return env.ASSETS.fetch(request)
+    return htmlResponse(html, env, {
+      status: assetRes.status,
+      headers: assetRes.headers,
+    })
   },
 }

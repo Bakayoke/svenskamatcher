@@ -44,6 +44,9 @@ export function writeUrlState(state: UrlState) {
     if (key === 'layout' && value === 'timeline') continue
     p.set(key, String(value))
   }
+  // Preserve analytics view markers (Cloudflare Web Analytics SPA tracking).
+  const currentView = new URLSearchParams(window.location.search).get('view')
+  if (currentView && !p.has('view')) p.set('view', currentView)
   const qs = p.toString()
   const next = qs ? `?${qs}` : window.location.pathname
   window.history.replaceState(null, '', next)

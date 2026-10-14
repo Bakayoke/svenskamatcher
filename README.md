@@ -27,6 +27,18 @@ npm run deploy
 
 Custom domains (`svenskamatcher.com` / `www`) sätts via `routes` i `wrangler.toml` med `custom_domain = true`.
 
+### Web Analytics
+
+1. Cloudflare Dashboard → **Analytics & logs** → **Web analytics** → **Add a site** → `svenskamatcher.com`
+2. Välj **Enable with JS snippet** (manual) och kopiera **token**
+3. Kör:
+
+```bash
+npx wrangler secret put CF_WEB_ANALYTICS_TOKEN
+```
+
+4. Deploy igen (`npm run deploy`). Beacon injiceras i HTML. Feature-användning syns som `?view=ask|along|route|shortlist|…` i SPA-trafiken.
+
 ## Kom igång (lokalt)
 
 ```bash
