@@ -239,6 +239,7 @@ export default function App() {
   const [listaCopied, setListaCopied] = useState(false)
   const [importNotice, setImportNotice] = useState<string | null>(null)
   const [tomorrowWatchCount, setTomorrowWatchCount] = useState<number | null>(null)
+  const [tomorrowWatchPreview, setTomorrowWatchPreview] = useState<string[]>([])
   const [showTomorrowBanner, setShowTomorrowBanner] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(
     () => !isOnboardingDone() && loadWatchTeams().length < 2,
@@ -380,28 +381,40 @@ export default function App() {
   useEffect(() => {
     if (watchTeams.length === 0) {
       setTomorrowWatchCount(null)
+      setTomorrowWatchPreview([])
       setShowTomorrowBanner(false)
       return
     }
     const tomorrow = addDays(new Date(), 1)
     const dayIso = toDateParam(tomorrow)
-    if (isTomorrowBannerDismissed(dayIso)) {
-      setShowTomorrowBanner(false)
-      return
-    }
     let cancelled = false
     fetchMatches(dayIso, dayIso)
       .then((payload) => {
         if (cancelled) return
-        const games = flattenGames(payload.competitions ?? [])
-        const count = games.filter((g) => matchesPreset(g, 'watch', watchTeams)).length
-        setTomorrowWatchCount(count)
+        const games = flattenGames(payload.competitions ?? []).filter((g) =>
+          matchesPreset(g, 'watch', watchTeams),
+        )
+        setTomorrowWatchCount(games.length)
+        const watched = new Set(watchTeams.map((t) => t.toLowerCase()))
+        const names: string[] = []
+        for (const g of games) {
+          for (const n of [g.homeTeam.name.trim(), g.awayTeam.name.trim()]) {
+            if (!n || !watched.has(n.toLowerCase())) continue
+            if (!names.some((x) => x.toLowerCase() === n.toLowerCase())) names.push(n)
+          }
+          if (names.length >= 3) break
+        }
+        setTomorrowWatchPreview(names)
         const alreadyOnTomorrow =
           mode === 'single' && isSameDay(single, tomorrow) && preset === 'watch'
-        setShowTomorrowBanner(count > 0 && !alreadyOnTomorrow)
+        const dismissed = isTomorrowBannerDismissed(dayIso)
+        setShowTomorrowBanner(games.length > 0 && !alreadyOnTomorrow && !dismissed)
       })
       .catch(() => {
-        if (!cancelled) setTomorrowWatchCount(null)
+        if (!cancelled) {
+          setTomorrowWatchCount(null)
+          setTomorrowWatchPreview([])
+        }
       })
     return () => {
       cancelled = true
@@ -833,12 +846,14 @@ export default function App() {
   }
 
   function openTomorrowWatch() {
+    trackView('watch')
+    navigateSeo('tomorrow')
     const d = addDays(new Date(), 1)
     setMode('single')
     setSingle(d)
     setRange({ from: d, to: d })
     setPreset('watch')
-    setFocus('all')
+    setFocus('overview')
     setShowShortlistOnly(false)
     setTeamFocus(null)
     setClusterId(null)
@@ -1023,13 +1038,23 @@ export default function App() {
       </header>
 
       {showTomorrowBanner && tomorrowWatchCount != null && tomorrowWatchCount > 0 && (
-        <div className="return-banner panel no-print" role="status">
-          <p>
-            Imorgon: <strong>{tomorrowWatchCount}</strong> matcher för dina bevakade lag.
-          </p>
+        <div className="return-banner panel tomorrow-banner no-print" role="status">
+          <div>
+            <p className="banner-kicker">Imorgon</p>
+            <p>
+              <strong>{tomorrowWatchCount}</strong>{' '}
+              {tomorrowWatchCount === 1 ? 'match' : 'matcher'} för dina lag
+              {tomorrowWatchPreview.length > 0
+                ? ` · ${tomorrowWatchPreview.join(', ')}${
+                    tomorrowWatchCount > tomorrowWatchPreview.length ? '…' : ''
+                  }`
+                : ''}
+              .
+            </p>
+          </div>
           <div className="return-actions">
             <button type="button" className="chip active" onClick={openTomorrowWatch}>
-              Visa imorgon
+              Öppna Mina lag imorgon
             </button>
             <button
               type="button"
@@ -1116,6 +1141,9 @@ export default function App() {
             onClick={goTomorrow}
           >
             Imorgon
+            {watchTeams.length > 0 && tomorrowWatchCount != null && tomorrowWatchCount > 0
+              ? ` · ${tomorrowWatchCount}`
+              : ''}
           </button>
           <button
             type="button"
@@ -1712,9 +1740,19 @@ export default function App() {
                 </p>
               )}
               {preset === 'watch' && watchTeams.length > 0 && (
-                <button type="button" className="chip" onClick={() => setPreset('all')}>
-                  Visa alla matcher
-                </button>
+                <>
+                  {tomorrowWatchCount != null &&
+                    tomorrowWatchCount > 0 &&
+                    !(mode === 'single' && isSameDay(single, addDays(now, 1))) && (
+                      <button type="button" className="chip active" onClick={openTomorrowWatch}>
+                        Imorgon: {tomorrowWatchCount}{' '}
+                        {tomorrowWatchCount === 1 ? 'match' : 'matcher'}
+                      </button>
+                    )}
+                  <button type="button" className="chip" onClick={() => setPreset('all')}>
+                    Visa alla matcher
+                  </button>
+                </>
               )}
               {showShortlistOnly && (
                 <button type="button" className="chip" onClick={() => setShowShortlistOnly(false)}>
@@ -1727,8 +1765,18 @@ export default function App() {
                 </button>
               )}
               {!teamFocus && !showShortlistOnly && preset !== 'watch' && (
-                <button type="button" className="chip" onClick={goTomorrow}>
-                  Prova imorgon
+                <button
+                  type="button"
+                  className="chip"
+                  onClick={
+                    watchTeams.length > 0 && tomorrowWatchCount
+                      ? openTomorrowWatch
+                      : goTomorrow
+                  }
+                >
+                  {watchTeams.length > 0 && tomorrowWatchCount
+                    ? `Imorgon · ${tomorrowWatchCount} för dina lag`
+                    : 'Prova imorgon'}
                 </button>
               )}
             </div>

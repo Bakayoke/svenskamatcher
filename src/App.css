@@ -1058,6 +1058,10 @@ a.maps-chip {
   border-left: 4px solid var(--yellow);
 }
 
+.tomorrow-banner {
+  border-left: 4px solid var(--blue);
+}
+
 .discover {
   margin-bottom: 1rem;
   padding: 0.9rem 1rem 1rem;
