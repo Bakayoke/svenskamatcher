@@ -1,3 +1,5 @@
+import { writeFileSync, readFileSync, existsSync } from 'node:fs'
+import path from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { askScout } from './server/aiScout.ts'
@@ -156,8 +158,26 @@ function matchesApiPlugin(): Plugin {
   }
 }
 
+/** Stamp sw.js + version.json on every build so open tabs detect deploys. */
+function stampReleasePlugin(): Plugin {
+  return {
+    name: 'stamp-release',
+    apply: 'build',
+    closeBundle() {
+      const buildId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const dist = path.resolve(__dirname, 'dist')
+      const swPath = path.join(dist, 'sw.js')
+      if (existsSync(swPath)) {
+        const sw = readFileSync(swPath, 'utf8')
+        writeFileSync(swPath, `${sw}\nself.BUILD_ID=${JSON.stringify(buildId)};\n`)
+      }
+      writeFileSync(path.join(dist, 'version.json'), `${JSON.stringify({ buildId })}\n`)
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), matchesApiPlugin()],
+  plugins: [react(), matchesApiPlugin(), stampReleasePlugin()],
   server: {
     port: 5175,
   },

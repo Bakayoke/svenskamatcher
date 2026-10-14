@@ -43,6 +43,12 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  // Never cache the release markers — clients poll these to detect deploys.
+  if (url.pathname === '/version.json' || url.pathname === '/sw.js') {
+    event.respondWith(fetch(req, { cache: 'no-store' }).catch(() => caches.match(req)))
+    return
+  }
+
   // Always prefer network for navigations / HTML so deploys show up in Safari.
   const accept = req.headers.get('accept') || ''
   if (req.mode === 'navigate' || accept.includes('text/html') || url.pathname === '/' || url.pathname.endsWith('.html')) {
