@@ -14,6 +14,8 @@ export type UrlState = {
   layout?: 'timeline' | 'league'
   shortlist?: '1'
   lista?: string
+  plan?: '1'
+  plantitel?: string
 }
 
 export function readUrlState(): UrlState {
@@ -31,6 +33,8 @@ export function readUrlState(): UrlState {
     layout: get('layout') as UrlState['layout'],
     shortlist: get('shortlist') as '1' | undefined,
     lista: get('lista'),
+    plan: get('plan') as '1' | undefined,
+    plantitel: get('plantitel') ?? undefined,
   }
 }
 

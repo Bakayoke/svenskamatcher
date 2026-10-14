@@ -74,9 +74,56 @@ export function mergeShortlists(
 }
 
 export function shortlistShareUrl(items: ShortlistedMatch[]): string {
-  const url = new URL(window.location.href)
-  url.search = ''
+  const url = new URL(window.location.origin + '/')
   url.searchParams.set('lista', encodeShortlist(items))
   url.searchParams.set('shortlist', '1')
   return url.toString()
+}
+
+export type PlanShareMeta = {
+  /** Shown in import banner, e.g. "Dagsrutt från Göteborg". */
+  title?: string
+  /** Prefer opening the plan on this day (YYYY-MM-DD). */
+  day?: string
+}
+
+/** Shareable day/along plan — opens as Mina matcher for the recipient. */
+export function planShareUrl(items: ShortlistedMatch[], meta?: PlanShareMeta): string {
+  const url = new URL(window.location.origin + '/')
+  url.searchParams.set('lista', encodeShortlist(items))
+  url.searchParams.set('shortlist', '1')
+  url.searchParams.set('plan', '1')
+  if (meta?.title?.trim()) {
+    url.searchParams.set('plantitel', meta.title.trim().slice(0, 80))
+  }
+  const day = meta?.day ?? items[0]?.date.slice(0, 10)
+  if (day) {
+    url.searchParams.set('from', day)
+    url.searchParams.set('to', day)
+  }
+  return url.toString()
+}
+
+export function toShortlistedFromAsk(
+  matches: Array<{
+    gameId: number
+    date: string
+    home: string
+    away: string
+    competitionName: string
+    location: string
+    url: string
+  }>,
+): ShortlistedMatch[] {
+  const now = new Date().toISOString()
+  return matches.map((m) => ({
+    gameId: m.gameId,
+    date: m.date,
+    home: m.home,
+    away: m.away,
+    competitionName: m.competitionName,
+    location: m.location,
+    url: m.url,
+    savedAt: now,
+  }))
 }

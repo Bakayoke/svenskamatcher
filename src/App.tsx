@@ -34,7 +34,13 @@ import {
   type ScoutPreset,
   type ShortlistedMatch,
 } from './agentStore'
-import { decodeShortlist, mergeShortlists, shortlistShareUrl } from './shareShortlist'
+import {
+  decodeShortlist,
+  mergeShortlists,
+  planShareUrl,
+  shortlistShareUrl,
+  toShortlistedFromAsk,
+} from './shareShortlist'
 import { fetchMatches } from './api'
 import { buildClusters } from './clusters'
 import { districtName } from './districts'
@@ -202,6 +208,8 @@ function initialFromUrl() {
               : 'all',
     } as Filters,
     sharedLista: u.lista,
+    sharedPlan: u.plan === '1',
+    sharedPlanTitle: u.plantitel,
   }
 }
 
@@ -237,6 +245,7 @@ export default function App() {
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => loadSavedViews())
   const [viewNameDraft, setViewNameDraft] = useState('')
   const [listaCopied, setListaCopied] = useState(false)
+  const [planCopied, setPlanCopied] = useState(false)
   const [importNotice, setImportNotice] = useState<string | null>(null)
   const [tomorrowWatchCount, setTomorrowWatchCount] = useState<number | null>(null)
   const [tomorrowWatchPreview, setTomorrowWatchPreview] = useState<string[]>([])
@@ -324,8 +333,16 @@ export default function App() {
     saveShortlist(merged)
     setShortlist(merged)
     setShowShortlistOnly(true)
-    setImportNotice(`Importerade ${decoded.length} matcher till Mina matcher.`)
-  }, [boot.sharedLista])
+    const title = boot.sharedPlanTitle?.trim()
+    setImportNotice(
+      boot.sharedPlan
+        ? title
+          ? `Importerade plan “${title}” · ${decoded.length} matcher.`
+          : `Importerade delad plan · ${decoded.length} matcher.`
+        : `Importerade ${decoded.length} matcher till Mina matcher.`,
+    )
+    trackView('share')
+  }, [boot.sharedLista, boot.sharedPlan, boot.sharedPlanTitle])
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 720px)')
@@ -812,6 +829,32 @@ export default function App() {
     window.setTimeout(() => setListaCopied(false), 1800)
   }
 
+  async function copyPlanShareLink(
+    items: ReturnType<typeof toShortlistedFromAsk>,
+    meta?: { title?: string; day?: string },
+  ) {
+    if (items.length === 0) return
+    trackView('share')
+    await navigator.clipboard.writeText(planShareUrl(items, meta))
+    setPlanCopied(true)
+    window.setTimeout(() => setPlanCopied(false), 1800)
+  }
+
+  function dayRouteAsShortlist() {
+    if (!dayRoute || dayRoute.stops.length === 0) return []
+    const now = new Date().toISOString()
+    return dayRoute.stops.map((stop) => ({
+      gameId: stop.game.gameId,
+      date: stop.game.date,
+      home: stop.game.homeTeam.name.trim(),
+      away: stop.game.awayTeam.name.trim(),
+      competitionName: stop.game.competitionName,
+      location: stop.game.location,
+      url: stop.game.url,
+      savedAt: now,
+    }))
+  }
+
   function applySavedView(view: SavedView) {
     setFilters((f) => ({
       ...f,
@@ -1022,6 +1065,18 @@ export default function App() {
               >
                 Lägg i mina matcher
               </button>
+              <button
+                type="button"
+                className="chip"
+                onClick={() =>
+                  void copyPlanShareLink(toShortlistedFromAsk(result.matches), {
+                    title: listFirst ? 'Matcher längs vägen' : 'Matchförslag',
+                    day: result.matches[0]?.date.slice(0, 10),
+                  })
+                }
+              >
+                {planCopied ? 'Länk kopierad' : 'Dela plan'}
+              </button>
             </div>
           </>
         )}
@@ -1226,7 +1281,7 @@ export default function App() {
             {shortlist.length > 0 && (
               <div className="chip-row tight">
                 <button type="button" className="chip" onClick={() => void copyShortlistShareLink()}>
-                  {listaCopied ? 'Länk kopierad' : 'Dela'}
+                  {listaCopied ? 'Länk kopierad' : 'Dela lista'}
                 </button>
                 <button
                   type="button"
@@ -2173,6 +2228,20 @@ export default function App() {
                         )}
                         <button type="button" className="chip" onClick={applyDayRouteToShortlist}>
                           Lägg i mina matcher
+                        </button>
+                        <button
+                          type="button"
+                          className="chip"
+                          onClick={() =>
+                            void copyPlanShareLink(dayRouteAsShortlist(), {
+                              title: basePlace
+                                ? `Dagsrutt från ${basePlace.query}`
+                                : 'Dagsrutt',
+                              day: dayRoute.stops[0]?.game.date.slice(0, 10),
+                            })
+                          }
+                        >
+                          {planCopied ? 'Länk kopierad' : 'Dela plan'}
                         </button>
                       </div>
                     </>
