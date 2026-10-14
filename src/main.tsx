@@ -11,8 +11,15 @@ createRoot(document.getElementById('root')!).render(
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js').catch(() => {
-      /* ignore SW failures in unsupported/dev contexts */
-    })
+    void navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        void reg.update()
+        // New SW takes over immediately (pairs with skipWaiting in sw.js).
+        if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+      })
+      .catch(() => {
+        /* ignore SW failures in unsupported/dev contexts */
+      })
   })
 }

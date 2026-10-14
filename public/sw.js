@@ -1,7 +1,7 @@
 /* Svenska Matcher – lightweight offline shell + last matches cache */
-const SHELL = 'sm-shell-v1'
-const API = 'sm-api-v1'
-const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icon-192.png', '/icon-512.png']
+const SHELL = 'sm-shell-v2'
+const API = 'sm-api-v2'
+const SHELL_URLS = ['/manifest.webmanifest', '/favicon.svg', '/icon-192.png', '/icon-512.png']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -23,6 +23,10 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
+})
+
 self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
@@ -39,6 +43,14 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  // Always prefer network for navigations / HTML so deploys show up in Safari.
+  const accept = req.headers.get('accept') || ''
+  if (req.mode === 'navigate' || accept.includes('text/html') || url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(networkFirstHtml(req))
+    return
+  }
+
+  // Hashed Vite assets + icons: cache-first is fine.
   event.respondWith(cacheFirstShell(req))
 })
 
@@ -58,6 +70,26 @@ async function networkFirstApi(req) {
   }
 }
 
+async function networkFirstHtml(req) {
+  try {
+    const res = await fetch(req)
+    if (res.ok) {
+      const cache = await caches.open(SHELL)
+      cache.put(req, res.clone())
+      if (req.mode === 'navigate') {
+        cache.put('/index.html', res.clone())
+      }
+    }
+    return res
+  } catch {
+    const hit =
+      (await caches.match(req)) ||
+      (await caches.match('/index.html')) ||
+      (await caches.match('/'))
+    return hit ?? Response.error()
+  }
+}
+
 async function cacheFirstShell(req) {
   const cached = await caches.match(req)
   if (cached) return cached
@@ -69,7 +101,6 @@ async function cacheFirstShell(req) {
     }
     return res
   } catch {
-    const fallback = await caches.match('/index.html')
-    return fallback ?? Response.error()
+    return Response.error()
   }
 }
