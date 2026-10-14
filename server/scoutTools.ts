@@ -26,6 +26,12 @@ export type ScoutMatch = {
   url: string
   lat?: number
   lon?: number
+  /** Along-route: km off the driving line. */
+  detourKm?: number
+  /** Along-route: earliest arrive clock HH:mm. */
+  eta?: string
+  /** Along-route: 0–100 progress along trip. */
+  alongPct?: number
 }
 
 export type ScoutContext = {
@@ -42,9 +48,13 @@ export type ScoutContext = {
 const MAX_GEOCODE = 40
 const DEFAULT_WATCH = 75
 const ARRIVE_BUFFER = 15
-const CORRIDOR_KM = 110
+/** Max detour from the straight drive line (hard cut). */
+const CORRIDOR_KM = 55
+/** Prefer stops this close when building the alternatives menu. */
+const PREFERRED_CORRIDOR_KM = 28
+const ALONG_ALT_LIMIT = 8
 /** How long you may wait at a stop after earliest arrival before kickoff. */
-const MAX_WAIT_AFTER_ETA_H = 14
+const MAX_WAIT_AFTER_ETA_H = 12
 
 function isoToday() {
   const d = new Date()
@@ -630,8 +640,8 @@ export async function toolAlongRoute(
   const hits: Hit[] = []
   for (const g of mapped) {
     const seg = distanceToSegmentKm(g, fromP, toP)
-    const nearStart = haversineKm(fromP, g) <= Math.min(45, corridorKm)
-    const nearEnd = haversineKm(toP, g) <= Math.min(50, corridorKm)
+    const nearStart = haversineKm(fromP, g) <= Math.min(28, corridorKm)
+    const nearEnd = haversineKm(toP, g) <= Math.min(32, corridorKm)
     const onCorridor = seg.km <= corridorKm && seg.t >= -0.02 && seg.t <= 1.02
     if (!onCorridor && !nearStart && !nearEnd) continue
 
@@ -644,9 +654,14 @@ export async function toolAlongRoute(
     const slack = Math.round((need - etaMs) / 60000)
     if (slack < 0) continue
     if (slack > maxWait) continue
+    const detour = onCorridor
+      ? seg.km
+      : nearStart
+        ? haversineKm(fromP, g)
+        : haversineKm(toP, g)
     hits.push({
       ...g,
-      corridorKm: onCorridor ? seg.km : nearStart ? haversineKm(fromP, g) : haversineKm(toP, g),
+      corridorKm: detour,
       kmAlong,
       etaMs,
       slackMinutes: slack,
@@ -654,11 +669,18 @@ export async function toolAlongRoute(
     })
   }
 
-  hits.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
+  hits.sort(
+    (a, b) =>
+      a.corridorKm - b.corridorKm || a.kmAlong - b.kmAlong || a.date.localeCompare(b.date),
+  )
 
-  // Alternatives first: many reachable stops to choose from (not a "do all" itinerary)
-  const useHits = pickAlongAlternatives(hits, totalKm, 16)
-  const chain = optimizeAlongRoute(hits, watch, totalKm)
+  // Alternatives: few close-to-road stops (not a "do all" itinerary)
+  const useHits = pickAlongAlternatives(hits, totalKm, ALONG_ALT_LIMIT)
+  const chain = optimizeAlongRoute(
+    hits.filter((h) => h.corridorKm <= PREFERRED_CORRIDOR_KM + 12),
+    watch,
+    totalKm,
+  )
 
   // Keep summary short — the UI renders the match list; avoid duplicating it as prose.
   let summary =
@@ -687,6 +709,9 @@ export async function toolAlongRoute(
       url: g.url,
       lat: g.lat,
       lon: g.lon,
+      detourKm: Math.round(g.corridorKm),
+      eta: clockFromMs(g.etaMs),
+      alongPct: Math.round(g.progress * 100),
     })),
     meta: {
       from: fromP.label,
@@ -717,35 +742,37 @@ type AlongHit = ScoutMatch &
   }
 
 /**
- * Menu of reachable stops along the drive for the user to choose from.
- * Spreads across route segments, then fills with remaining candidates.
+ * Menu of reachable stops: prefer close-to-road, spread along the trip, cap count.
  */
 function pickAlongAlternatives(hits: AlongHit[], totalKm: number, limit: number): AlongHit[] {
   if (hits.length === 0 || totalKm <= 0) return []
-  const buckets = 6
+  const close = hits.filter((h) => h.corridorKm <= PREFERRED_CORRIDOR_KM)
+  const pool =
+    close.length >= Math.min(4, limit)
+      ? close
+      : hits.filter((h) => h.corridorKm <= PREFERRED_CORRIDOR_KM + 18)
+
+  const buckets = 5
   const byBucket: AlongHit[][] = Array.from({ length: buckets }, () => [])
-  for (const h of hits) {
+  for (const h of pool) {
     const b = Math.min(buckets - 1, Math.floor(h.progress * buckets))
     byBucket[b]!.push(h)
   }
-  // Prefer earlier kickoff within each bucket (more flexible stop)
+  // Closest to the road first, then earlier kickoff
   for (const list of byBucket) {
-    list.sort((a, b) => a.date.localeCompare(b.date) || a.corridorKm - b.corridorKm)
+    list.sort((a, b) => a.corridorKm - b.corridorKm || a.date.localeCompare(b.date))
   }
 
   const picked: AlongHit[] = []
   const seen = new Set<number>()
-  // Guarantee southern buckets get slots even if the north is dense
-  const perBucketCap = 4
+  const orderRounds = [
+    [0, 1, 2, 3, 4],
+    [4, 3, 2, 1, 0],
+    [2, 3, 1, 4, 0],
+  ]
 
-  for (let round = 0; round < perBucketCap && picked.length < limit; round++) {
-    // South-biased order on later rounds: 5,4,3,2,1,0 then normal
-    const order =
-      round === 0
-        ? [0, 1, 2, 3, 4, 5]
-        : round === 1
-          ? [5, 4, 3, 2, 1, 0]
-          : [2, 3, 4, 5, 1, 0]
+  for (const order of orderRounds) {
+    if (picked.length >= limit) break
     for (const b of order) {
       if (picked.length >= limit) break
       const next = byBucket[b]!.find((h) => !seen.has(h.gameId))
@@ -756,7 +783,7 @@ function pickAlongAlternatives(hits: AlongHit[], totalKm: number, limit: number)
   }
 
   if (picked.length < limit) {
-    for (const h of hits) {
+    for (const h of pool) {
       if (picked.length >= limit) break
       if (seen.has(h.gameId)) continue
       seen.add(h.gameId)
@@ -764,7 +791,7 @@ function pickAlongAlternatives(hits: AlongHit[], totalKm: number, limit: number)
     }
   }
 
-  return picked.sort((a, b) => a.kmAlong - b.kmAlong || a.date.localeCompare(b.date))
+  return picked.sort((a, b) => a.kmAlong - b.kmAlong || a.corridorKm - b.corridorKm)
 }
 
 /** Greedy feasible picks that must advance along the drive. */
@@ -856,7 +883,7 @@ export const TOOL_DEFINITIONS = [
         toPlace: { type: 'string', description: 'Målord' },
         departTime: { type: 'string', description: 'Avresa HH:mm, t.ex. 08:00' },
         day: { type: 'string', description: 'Datum YYYY-MM-DD' },
-        corridorKm: { type: 'number', description: 'Max km från fågelvägen (default 35)' },
+        corridorKm: { type: 'number', description: 'Max km från fågelvägen (default 55)' },
         watchMinutes: { type: 'number' },
       },
       required: ['fromPlace', 'toPlace'],

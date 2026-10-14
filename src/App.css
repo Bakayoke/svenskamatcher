@@ -928,6 +928,11 @@ a.maps-chip {
   gap: 0.45rem;
 }
 
+.ask-meta {
+  color: #5a655e;
+  font-size: 0.9em;
+}
+
 .timeline-game.shortlisted,
 .game.shortlisted {
   outline: 2px solid rgba(0, 82, 147, 0.25);

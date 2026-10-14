@@ -10,6 +10,9 @@ export type ScoutAskMatch = {
   url: string
   lat?: number
   lon?: number
+  detourKm?: number
+  eta?: string
+  alongPct?: number
 }
 
 export type ScoutAskContext = {

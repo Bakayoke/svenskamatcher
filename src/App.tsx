@@ -1031,13 +1031,25 @@ export default function App() {
               {result.matches.map((m) => (
                 <li key={m.gameId}>
                   <strong>
-                    {m.date.slice(0, 10)} {m.date.slice(11, 16)}
+                    {m.date.slice(11, 16)}
                   </strong>{' '}
                   {m.home} – {m.away}
                   <br />
                   <span>
                     {m.location} · {m.competitionName}
                   </span>
+                  {(m.detourKm != null || m.eta || m.alongPct != null) && (
+                    <>
+                      <br />
+                      <span className="ask-meta">
+                        {m.detourKm != null ? `${m.detourKm} km från vägen` : ''}
+                        {m.eta ? `${m.detourKm != null ? ' · ' : ''}framme ca ${m.eta}` : ''}
+                        {m.alongPct != null
+                          ? `${m.detourKm != null || m.eta ? ' · ' : ''}${m.alongPct}% av resan`
+                          : ''}
+                      </span>
+                    </>
+                  )}
                   <br />
                   <span className="foot-links">
                     {m.lat != null && m.lon != null && (
@@ -2073,8 +2085,7 @@ export default function App() {
               {assistantTab === 'along' && (
                 <>
                   <p className="cluster-lede">
-                    Hitta matcher längs en bilresa. Välj avrese-datum och tid — dagens datum är
-                    förvalt.
+                    Matcher nära vägen att välja bland — avrese-datum och tid (idag förvalt).
                   </p>
                   <div className="base-row along-inputs">
                     <input
