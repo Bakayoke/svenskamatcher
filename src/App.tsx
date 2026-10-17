@@ -2019,8 +2019,7 @@ export default function App() {
           Gillar du sidan?{' '}
           <a
             href="https://app.swish.nu/1/p/sw/?sw=46730457930&msg=Fika%20till%20Svenska%20Matcher&edit=amt,msg"
-            target="_blank"
-            rel="noreferrer"
+            onClick={openSwishFika}
           >
             Bjud på fika via Swish
           </a>
@@ -2696,6 +2695,30 @@ function ScoreBoard({
       <span className="vs">vs</span>
     </div>
   )
+}
+
+const SWISH_NUMBER = '46730457930'
+const SWISH_WEB =
+  'https://app.swish.nu/1/p/sw/?sw=46730457930&msg=Fika%20till%20Svenska%20Matcher&edit=amt,msg'
+
+/** Open Swish app with payee prefilled; fall back to web URL if the app scheme fails. */
+function openSwishFika(e: { preventDefault: () => void }) {
+  e.preventDefault()
+  const data = encodeURIComponent(
+    JSON.stringify({
+      version: 1,
+      payee: { value: SWISH_NUMBER },
+      message: { value: 'Fika till Svenska Matcher', editable: true },
+    }),
+  )
+  const appUrl = `swish://payment?data=${data}`
+  const started = Date.now()
+  window.location.href = appUrl
+  window.setTimeout(() => {
+    if (document.visibilityState === 'visible' && Date.now() - started < 2000) {
+      window.location.href = SWISH_WEB
+    }
+  }, 700)
 }
 
 function TeamSide({
