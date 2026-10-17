@@ -2015,6 +2015,17 @@ export default function App() {
         <p>
           Anteckningar, bevakning och sparade matcher ligger lokalt i din webbläsare.
         </p>
+        <p className="footer-fika">
+          Gillar du sidan?{' '}
+          <a
+            href="https://app.swish.nu/1/p/sw/?sw=46730457930&msg=Fika%20till%20Svenska%20Matcher&edit=amt,msg"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Bjud på fika via Swish
+          </a>
+          <span className="footer-fika-number"> · 073-045 79 30</span>
+        </p>
       </footer>
 
       <div className="chat-dock no-print">
