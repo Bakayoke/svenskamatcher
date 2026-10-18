@@ -997,14 +997,6 @@ a.maps-chip {
   color: var(--gold);
 }
 
-.footer-fika {
-  margin-top: 0.85rem;
-}
-
-.footer-fika-number {
-  opacity: 0.75;
-}
-
 .team-link {
   appearance: none;
   border: 0;
